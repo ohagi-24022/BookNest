@@ -1,4 +1,3 @@
-import * as Notifications from 'expo-notifications';
 import { useState } from 'react';
 import {
   ActivityIndicator,
@@ -13,6 +12,7 @@ import {
 } from 'react-native';
 
 import { envStatus } from '../../src/lib/env';
+import { useAppSettings } from '../../src/store/AppSettingsContext';
 import { useAuth } from '../../src/store/AuthContext';
 import { ThemeMode, useAppTheme } from '../../src/store/ThemeContext';
 
@@ -24,12 +24,11 @@ const themeOptions: Array<{ label: string; value: ThemeMode }> = [
 
 export default function SettingsScreen() {
   const { configured, initializing, user, signIn, signOut, signUp } = useAuth();
+  const { openExternalPurchaseLinks, setOpenExternalPurchaseLinks } = useAppSettings();
   const { colors, mode, setMode } = useAppTheme();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authSubmitting, setAuthSubmitting] = useState(false);
-  const [openExternalApp, setOpenExternalApp] = useState(false);
-  const [newReleaseNotifications, setNewReleaseNotifications] = useState(false);
 
   const submitAuth = async (authMode: 'signIn' | 'signUp') => {
     if (!email.trim() || !password) {
@@ -64,16 +63,6 @@ export default function SettingsScreen() {
     }
   };
 
-  const toggleNotifications = async (value: boolean) => {
-    if (value) {
-      const permission = await Notifications.requestPermissionsAsync();
-      setNewReleaseNotifications(permission.granted);
-      return;
-    }
-
-    setNewReleaseNotifications(false);
-  };
-
   return (
     <ScrollView style={[styles.screen, { backgroundColor: colors.background }]} contentContainerStyle={styles.content}>
       <View style={[styles.section, { borderBottomColor: colors.border }]}>
@@ -93,9 +82,12 @@ export default function SettingsScreen() {
             <Pressable disabled={authSubmitting} style={[styles.neutralButton, { borderColor: colors.border }]} onPress={submitSignOut}>
               <Text style={[styles.neutralButtonText, { color: colors.text }]}>ログアウト</Text>
             </Pressable>
-            <Pressable style={[styles.dangerButton, { borderColor: colors.danger }]}>
-              <Text style={[styles.dangerButtonText, { color: colors.danger }]}>アカウント削除</Text>
-            </Pressable>
+            <View style={[styles.pendingBox, { backgroundColor: colors.elevated }]}>
+              <Text style={[styles.rowTitle, { color: colors.text }]}>アカウント削除</Text>
+              <Text style={[styles.rowCopy, { color: colors.muted }]}>
+                データ削除の設計を固めるまで、操作ボタンは非表示にしています。
+              </Text>
+            </View>
           </>
         ) : (
           <View>
@@ -175,29 +167,23 @@ export default function SettingsScreen() {
             </Text>
           </View>
           <Switch
-            onValueChange={setOpenExternalApp}
+            onValueChange={setOpenExternalPurchaseLinks}
             thumbColor="#ffffff"
             trackColor={{ false: '#d4d4d4', true: '#31c759' }}
-            value={openExternalApp}
+            value={openExternalPurchaseLinks}
           />
         </View>
       </View>
 
       <View style={[styles.section, { borderBottomColor: colors.border }]}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>通知</Text>
-        <View style={styles.row}>
+        <View style={[styles.pendingBox, { backgroundColor: colors.elevated }]}>
           <View style={styles.rowText}>
             <Text style={[styles.rowTitle, { color: colors.text }]}>新刊通知</Text>
             <Text style={[styles.rowCopy, { color: colors.muted }]}>
-              Supabase Cronで登録シリーズを監視し、Expoプッシュ通知を送れます。
+              Push Token保存と通知済み管理が必要なため、今は準備中にしています。
             </Text>
           </View>
-          <Switch
-            onValueChange={toggleNotifications}
-            thumbColor="#ffffff"
-            trackColor={{ false: '#d4d4d4', true: '#31c759' }}
-            value={newReleaseNotifications}
-          />
         </View>
       </View>
 
@@ -259,6 +245,10 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   dangerButtonText: { fontSize: 14, fontWeight: '800' },
+  pendingBox: {
+    borderRadius: 8,
+    padding: 12,
+  },
   segmented: {
     borderRadius: 8,
     flexDirection: 'row',

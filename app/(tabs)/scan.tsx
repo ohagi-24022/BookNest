@@ -135,19 +135,8 @@ export default function ScanScreen() {
         const bookInput = await lookupBookByIsbn(normalized);
         if (bookInput) {
           applyLookupResult({ ...bookInput, isbn: bookInput.isbn ?? normalized });
-
-          try {
-            const book = await addBook(bookInput);
-            setNotice({ tone: 'success', message: `${book.title} を追加しました。` });
-          } catch (error) {
-            setNotice({
-              tone: 'warning',
-              message:
-                error instanceof Error
-                  ? `書籍は見つかりましたが登録できませんでした: ${error.message}`
-                  : '書籍は見つかりましたが登録できませんでした。ログイン状態を確認してください。',
-            });
-          }
+          setIsScanning(false);
+          setNotice({ tone: 'success', message: `${bookInput.title} を確認してから追加してください。` });
           return;
         }
 
@@ -333,7 +322,7 @@ export default function ScanScreen() {
             ))}
           </View>
           <Pressable style={[styles.submitButton, { backgroundColor: colors.text }]} onPress={submitManual}>
-            <Text style={[styles.submitButtonText, { color: colors.background }]}>追加</Text>
+            <Text style={[styles.submitButtonText, { color: colors.background }]}>確認して追加</Text>
           </Pressable>
         </View>
       </ScrollView>

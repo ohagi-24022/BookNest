@@ -2,6 +2,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-gesture-handler';
 
+import { AppSettingsProvider } from '../src/store/AppSettingsContext';
 import { AuthProvider } from '../src/store/AuthContext';
 import { LibraryProvider } from '../src/store/LibraryContext';
 import { ThemeProvider, useAppTheme } from '../src/store/ThemeContext';
@@ -9,11 +10,13 @@ import { ThemeProvider, useAppTheme } from '../src/store/ThemeContext';
 export default function RootLayout() {
   return (
     <ThemeProvider>
-      <AuthProvider>
-        <LibraryProvider>
-          <RootStack />
-        </LibraryProvider>
-      </AuthProvider>
+      <AppSettingsProvider>
+        <AuthProvider>
+          <LibraryProvider>
+            <RootStack />
+          </LibraryProvider>
+        </AuthProvider>
+      </AppSettingsProvider>
     </ThemeProvider>
   );
 }

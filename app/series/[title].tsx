@@ -4,6 +4,7 @@ import { useLayoutEffect, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
+  Linking,
   Pressable,
   StyleSheet,
   Text,
@@ -13,6 +14,7 @@ import {
 
 import { BookCover } from '../../src/components/BookCover';
 import { buildPurchaseUrl } from '../../src/lib/bookApis';
+import { useAppSettings } from '../../src/store/AppSettingsContext';
 import { useLibrary } from '../../src/store/LibraryContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 import { Book, ReadingStatus, ShelfItem } from '../../src/types';
@@ -32,6 +34,7 @@ export default function SeriesScreen() {
   const navigation = useNavigation();
   const seriesTitle = decodeURIComponent(params.title ?? '');
   const { getSeriesItems, bulkUpdateStatus, updateBook, deleteBook, repairBookMetadata } = useLibrary();
+  const { openExternalPurchaseLinks } = useAppSettings();
   const { colors } = useAppTheme();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -47,7 +50,12 @@ export default function SeriesScreen() {
 
   const toggleSelected = (item: ShelfItem) => {
     if (!isOwnedBook(item)) {
-      WebBrowser.openBrowserAsync(buildPurchaseUrl(item.seriesTitle, item.volumeNumber));
+      const purchaseUrl = buildPurchaseUrl(item.seriesTitle, item.volumeNumber);
+      if (openExternalPurchaseLinks) {
+        Linking.openURL(purchaseUrl);
+      } else {
+        WebBrowser.openBrowserAsync(purchaseUrl);
+      }
       return;
     }
 

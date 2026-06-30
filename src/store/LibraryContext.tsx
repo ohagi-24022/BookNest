@@ -161,6 +161,16 @@ function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+function normalizeIsbn(value?: string) {
+  return value?.replace(/[^0-9X]/gi, '').toUpperCase();
+}
+
+function isDuplicateIsbn(currentBooks: Book[], bookInput: BookInput) {
+  const incomingIsbn = normalizeIsbn(bookInput.isbn);
+  if (!incomingIsbn) return false;
+  return currentBooks.some((book) => normalizeIsbn(book.isbn) === incomingIsbn);
+}
+
 const initialBooks: Book[] = [
   {
     id: 'demo-1',
@@ -340,6 +350,9 @@ export function LibraryProvider({ children }: PropsWithChildren) {
 
   const addBook = useCallback(async (bookInput: BookInput) => {
     const normalizedBookInput = normalizeBookInput(bookInput);
+    if (isDuplicateIsbn(books, normalizedBookInput)) {
+      throw new Error('この本はすでに登録されています。');
+    }
 
     if (configured) {
       if (!supabase || !user) throw new Error('ログインすると蔵書を登録できます。');
@@ -350,6 +363,9 @@ export function LibraryProvider({ children }: PropsWithChildren) {
         .insert(toBookInsert(normalizedBookInput, user.id, bookId));
 
       if (insertError) {
+        if (insertError.code === '23505') {
+          throw new Error('この本はすでに登録されています。');
+        }
         throw new Error(formatSupabaseError(insertError, 'Supabaseへの登録に失敗しました。'));
       }
 
@@ -372,7 +388,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
 
     setBooks((currentBooks) => [book, ...currentBooks]);
     return book;
-  }, [configured, user]);
+  }, [books, configured, user]);
 
   const addBookByIsbn = useCallback(
     async (isbn: string) => {

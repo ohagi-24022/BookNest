@@ -11,23 +11,53 @@ import {
 } from 'react-native';
 
 import { BookCover } from '../../src/components/BookCover';
+import { getMissingVolumes } from '../../src/lib/series';
 import { useLibrary } from '../../src/store/LibraryContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 import { Book, ReadingStatus } from '../../src/types';
 
-const filters: Array<{ label: string; value: ReadingStatus | 'all' }> = [
+type HomeFilter = ReadingStatus | 'all' | 'missing';
+
+const filters: Array<{ label: string; value: HomeFilter }> = [
   { label: 'すべて', value: 'all' },
   { label: '未読', value: 'unread' },
   { label: '読書中', value: 'reading' },
   { label: '読了', value: 'read' },
+  { label: '巻抜け', value: 'missing' },
 ];
 
 export default function HomeScreen() {
   const { colors } = useAppTheme();
   const { books, error, loading, requiresAuth, seriesGroups } = useLibrary();
-  const [filter, setFilter] = useState<ReadingStatus | 'all'>('all');
+  const [filter, setFilter] = useState<HomeFilter>('all');
   const [viewMode, setViewMode] = useState<'series' | 'books'>('series');
   const [query, setQuery] = useState('');
+  const seriesStats = useMemo(() => {
+    const bySeries = new Map<string, Book[]>();
+    books.forEach((book) => {
+      const group = bySeries.get(book.seriesTitle) ?? [];
+      group.push(book);
+      bySeries.set(book.seriesTitle, group);
+    });
+
+    return new Map(
+      [...bySeries.entries()].map(([title, groupedBooks]) => {
+        const volumes = groupedBooks
+          .map((book) => book.volumeNumber)
+          .filter((volume): volume is number => !!volume);
+        const missingVolumes = getMissingVolumes(volumes);
+        const latestVolume = volumes.length > 0 ? Math.max(...volumes) : undefined;
+        const completionRate =
+          latestVolume && latestVolume > 0 ? Math.round((groupedBooks.length / latestVolume) * 100) : 100;
+
+        return [title, { missingVolumes, completionRate }] as const;
+      }),
+    );
+  }, [books]);
+  const totalMissingCount = useMemo(
+    () => [...seriesStats.values()].reduce((total, stats) => total + stats.missingVolumes.length, 0),
+    [seriesStats],
+  );
 
   const visibleGroups = useMemo(
     () =>
@@ -36,16 +66,21 @@ export default function HomeScreen() {
           filter === 'all' ||
           (filter === 'unread' && group.unreadCount > 0) ||
           (filter === 'read' && group.readCount === group.ownedCount) ||
-          (filter === 'reading' && group.representative.status === 'reading');
+          (filter === 'reading' && group.representative.status === 'reading') ||
+          (filter === 'missing' && (seriesStats.get(group.title)?.missingVolumes.length ?? 0) > 0);
         const matchesQuery = group.title.toLowerCase().includes(query.toLowerCase());
         return matchesFilter && matchesQuery;
       }),
-    [filter, query, seriesGroups],
+    [filter, query, seriesGroups, seriesStats],
   );
   const visibleBooks = useMemo(
     () =>
       books.filter((book) => {
-        const matchesFilter = filter === 'all' || book.status === filter;
+        const matchesFilter =
+          filter === 'all' ||
+          (filter === 'missing'
+            ? (seriesStats.get(book.seriesTitle)?.missingVolumes.length ?? 0) > 0
+            : book.status === filter);
         const keyword = query.toLowerCase();
         const matchesQuery =
           book.title.toLowerCase().includes(keyword) ||
@@ -53,7 +88,7 @@ export default function HomeScreen() {
           (book.author?.toLowerCase().includes(keyword) ?? false);
         return matchesFilter && matchesQuery;
       }),
-    [books, filter, query],
+    [books, filter, query, seriesStats],
   );
 
   const renderCover = (book: Book) => (
@@ -84,6 +119,25 @@ export default function HomeScreen() {
           <Text style={[styles.noticeText, { color: colors.danger }]}>{error}</Text>
         </View>
       )}
+
+      <View style={[styles.summaryRow, { backgroundColor: colors.elevated }]}>
+        <View style={styles.summaryItem}>
+          <Text style={[styles.summaryValue, { color: colors.text }]}>{books.length}</Text>
+          <Text style={[styles.summaryLabel, { color: colors.muted }]}>冊</Text>
+        </View>
+        <View style={styles.summaryItem}>
+          <Text style={[styles.summaryValue, { color: colors.text }]}>
+            {books.filter((book) => book.status === 'unread').length}
+          </Text>
+          <Text style={[styles.summaryLabel, { color: colors.muted }]}>積読</Text>
+        </View>
+        <View style={styles.summaryItem}>
+          <Text style={[styles.summaryValue, { color: totalMissingCount > 0 ? '#765100' : colors.text }]}>
+            {totalMissingCount}
+          </Text>
+          <Text style={[styles.summaryLabel, { color: colors.muted }]}>巻抜け</Text>
+        </View>
+      </View>
 
       <TextInput
         value={query}
@@ -149,8 +203,27 @@ export default function HomeScreen() {
                     {item.ownedCount} 冊所持
                     {item.latestVolume ? ` / ${item.latestVolume}巻まで` : ''}
                   </Text>
+                  <View style={[styles.progressTrack, { backgroundColor: colors.elevated }]}>
+                    <View
+                      style={[
+                        styles.progressFill,
+                        {
+                          backgroundColor:
+                            (seriesStats.get(item.title)?.missingVolumes.length ?? 0) > 0
+                              ? '#765100'
+                              : colors.success,
+                          width: `${Math.min(seriesStats.get(item.title)?.completionRate ?? 100, 100)}%`,
+                        },
+                      ]}
+                    />
+                  </View>
                   <View style={styles.statusRow}>
                     {item.unreadCount > 0 && <Text style={styles.unreadBadge}>積読 {item.unreadCount}</Text>}
+                    {(seriesStats.get(item.title)?.missingVolumes.length ?? 0) > 0 && (
+                      <Text style={styles.missingBadge}>
+                        不足 {seriesStats.get(item.title)?.missingVolumes.length}
+                      </Text>
+                    )}
                     {item.readCount === item.ownedCount && <Text style={styles.readBadge}>読了</Text>}
                   </View>
                 </View>
@@ -237,6 +310,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   noticeText: { flex: 1, fontSize: 13, fontWeight: '700' },
+  summaryRow: {
+    borderRadius: 8,
+    flexDirection: 'row',
+    marginBottom: 12,
+    padding: 12,
+  },
+  summaryItem: { alignItems: 'center', flex: 1 },
+  summaryValue: { fontSize: 20, fontWeight: '900' },
+  summaryLabel: { fontSize: 12, fontWeight: '700', marginTop: 2 },
   filterRow: { flexDirection: 'row', gap: 8, paddingVertical: 14 },
   filterButton: {
     borderRadius: 8,
@@ -274,6 +356,13 @@ const styles = StyleSheet.create({
   bookRowBody: { flex: 1 },
   bookTitle: { fontSize: 16, fontWeight: '800', lineHeight: 21 },
   meta: { fontSize: 12, marginTop: 6 },
+  progressTrack: {
+    borderRadius: 999,
+    height: 5,
+    marginTop: 10,
+    overflow: 'hidden',
+  },
+  progressFill: { height: '100%' },
   statusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
   unreadBadge: {
     backgroundColor: '#f5f5f5',
@@ -288,6 +377,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#e8f7ee',
     borderRadius: 6,
     color: '#128a3f',
+    fontSize: 11,
+    fontWeight: '700',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+  },
+  missingBadge: {
+    backgroundColor: '#fff7df',
+    borderRadius: 6,
+    color: '#765100',
     fontSize: 11,
     fontWeight: '700',
     paddingHorizontal: 7,
