@@ -6,15 +6,40 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 
-import { lookupBookByIsbn } from '../lib/bookApis';
-import { getMissingVolumes } from '../lib/series';
+import { lookupBookByIsbn, lookupBookByTitle } from '../lib/bookApis';
+import { getMissingVolumes, parseSeriesTitle } from '../lib/series';
+import { supabase } from '../lib/supabase';
 import { Book, BookInput, MissingBook, ReadingStatus, ShelfItem } from '../types';
+import { useAuth } from './AuthContext';
+
+type SupabaseClient = NonNullable<typeof supabase>;
 
 const STORAGE_KEY = 'booknest.library.v1';
 const DEMO_USER_ID = 'local-user';
+
+type BookRow = {
+  id: string;
+  user_id: string;
+  isbn: string | null;
+  title: string;
+  series_title: string;
+  volume_number: number | null;
+  author: string | null;
+  thumbnail_url: string | null;
+  status: ReadingStatus;
+  created_at: string;
+};
+
+type SupabaseLikeError = {
+  message?: string;
+  details?: string;
+  hint?: string;
+  code?: string;
+};
 
 type SeriesGroup = {
   id: string;
@@ -28,10 +53,15 @@ type SeriesGroup = {
 
 type LibraryContextValue = {
   books: Book[];
+  loading: boolean;
+  error: string | null;
+  requiresAuth: boolean;
   seriesGroups: SeriesGroup[];
   addBook: (book: BookInput) => Promise<Book>;
   addBookByIsbn: (isbn: string) => Promise<Book | null>;
   updateBook: (bookId: string, updates: Partial<BookInput>) => Promise<void>;
+  deleteBook: (bookId: string) => Promise<void>;
+  repairBookMetadata: (bookId: string) => Promise<void>;
   bulkUpdateStatus: (bookIds: string[], status: ReadingStatus) => Promise<void>;
   getSeriesItems: (seriesTitle: string) => ShelfItem[];
 };
@@ -40,8 +70,95 @@ const LibraryContext = createContext<LibraryContextValue | null>(null);
 
 const now = () => new Date().toISOString();
 
+function fromBookRow(row: BookRow): Book {
+  const parsedTitle = parseSeriesTitle(row.title);
+  const parsedSeries = parseSeriesTitle(row.series_title || row.title);
+  const shouldRepairSeriesTitle =
+    !row.series_title ||
+    row.series_title.trim() === row.title.trim() ||
+    !!parsedSeries.volumeNumber;
+
+  return {
+    id: row.id,
+    userId: row.user_id,
+    isbn: row.isbn ?? undefined,
+    title: row.title,
+    seriesTitle: shouldRepairSeriesTitle ? parsedSeries.seriesTitle || parsedTitle.seriesTitle : row.series_title,
+    volumeNumber: row.volume_number ?? parsedTitle.volumeNumber ?? parsedSeries.volumeNumber,
+    author: row.author ?? undefined,
+    thumbnailUrl: row.thumbnail_url?.replace(/^http:\/\//i, 'https://') ?? undefined,
+    status: row.status,
+    createdAt: row.created_at,
+  };
+}
+
+function toBookInsert(bookInput: BookInput, userId: string, bookId: string) {
+  const parsed = parseSeriesTitle(bookInput.title);
+  const seriesTitle = bookInput.seriesTitle || parsed.seriesTitle;
+  const volumeNumber = bookInput.volumeNumber ?? parsed.volumeNumber ?? null;
+
+  return {
+    id: bookId,
+    user_id: userId,
+    isbn: bookInput.isbn ?? null,
+    title: bookInput.title,
+    series_title: seriesTitle,
+    volume_number: volumeNumber,
+    author: bookInput.author ?? null,
+    thumbnail_url: bookInput.thumbnailUrl?.replace(/^http:\/\//i, 'https://') ?? null,
+    status: bookInput.status,
+  };
+}
+
+function normalizeBookInput(bookInput: BookInput): BookInput {
+  const parsed = parseSeriesTitle(bookInput.title);
+
+  return {
+    ...bookInput,
+    seriesTitle: bookInput.seriesTitle || parsed.seriesTitle,
+    volumeNumber: bookInput.volumeNumber ?? parsed.volumeNumber,
+    thumbnailUrl: bookInput.thumbnailUrl?.replace(/^http:\/\//i, 'https://'),
+  };
+}
+
+function toBookUpdate(updates: Partial<BookInput>) {
+  return {
+    ...(updates.isbn !== undefined ? { isbn: updates.isbn || null } : {}),
+    ...(updates.title !== undefined ? { title: updates.title } : {}),
+    ...(updates.seriesTitle !== undefined ? { series_title: updates.seriesTitle } : {}),
+    ...(updates.volumeNumber !== undefined ? { volume_number: updates.volumeNumber ?? null } : {}),
+    ...(updates.author !== undefined ? { author: updates.author || null } : {}),
+    ...(updates.thumbnailUrl !== undefined ? { thumbnail_url: updates.thumbnailUrl || null } : {}),
+    ...(updates.status !== undefined ? { status: updates.status } : {}),
+  };
+}
+
+function formatSupabaseError(error: unknown, fallback: string) {
+  const supabaseError = error as SupabaseLikeError;
+  const parts = [
+    supabaseError.message,
+    supabaseError.details,
+    supabaseError.hint,
+    supabaseError.code ? `code: ${supabaseError.code}` : undefined,
+  ].filter(Boolean);
+
+  return parts.length > 0 ? parts.join(' / ') : fallback;
+}
+
 function createId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createUuid() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+    const random = Math.floor(Math.random() * 16);
+    const value = character === 'x' ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 const initialBooks: Book[] = [
@@ -96,25 +213,158 @@ const initialBooks: Book[] = [
 ];
 
 export function LibraryProvider({ children }: PropsWithChildren) {
-  const [books, setBooks] = useState<Book[]>(initialBooks);
+  const { configured, initializing, user } = useAuth();
+  const [books, setBooks] = useState<Book[]>(configured ? [] : initialBooks);
   const [hydrated, setHydrated] = useState(false);
+  const [loading, setLoading] = useState(configured);
+  const [error, setError] = useState<string | null>(null);
+  const enrichedIsbnsRef = useRef(new Set<string>());
+  const requiresAuth = configured && !user;
 
   useEffect(() => {
+    if (configured) {
+      setHydrated(true);
+      return;
+    }
+
     AsyncStorage.getItem(STORAGE_KEY)
       .then((storedBooks) => {
         if (storedBooks) setBooks(JSON.parse(storedBooks) as Book[]);
       })
       .finally(() => setHydrated(true));
-  }, []);
+  }, [configured]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (configured || !hydrated) return;
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(books));
-  }, [books, hydrated]);
+  }, [books, configured, hydrated]);
+
+  useEffect(() => {
+    if (!configured || initializing) return;
+    const client = supabase;
+    if (!client || !user) {
+      setBooks([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    async function loadBooks(client: SupabaseClient) {
+      try {
+        const { data, error: fetchError } = await client
+          .from('books')
+          .select(
+            'id,user_id,isbn,title,series_title,volume_number,author,thumbnail_url,status,created_at',
+          )
+          .order('created_at', { ascending: false });
+
+        if (fetchError) {
+          throw new Error(formatSupabaseError(fetchError, 'Failed to load books.'));
+        }
+        setBooks(((data ?? []) as BookRow[]).map(fromBookRow));
+      } catch (fetchError) {
+        setError(fetchError instanceof Error ? fetchError.message : 'Failed to load books.');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadBooks(client);
+  }, [configured, initializing, user]);
+
+  useEffect(() => {
+    if (!configured || !user || !supabase) return;
+    const client = supabase;
+    const userId = user.id;
+
+    const booksNeedingMetadata = books
+      .filter(
+        (book) =>
+          book.isbn &&
+          (!book.thumbnailUrl || !book.volumeNumber || book.seriesTitle.trim() === book.title.trim()) &&
+          !enrichedIsbnsRef.current.has(book.isbn),
+      )
+      .slice(0, 5);
+
+    if (booksNeedingMetadata.length === 0) return;
+
+    booksNeedingMetadata.forEach((book) => {
+      if (book.isbn) enrichedIsbnsRef.current.add(book.isbn);
+    });
+
+    async function enrichBooks() {
+      for (const book of booksNeedingMetadata) {
+        if (!book.isbn) continue;
+
+        try {
+          const metadata =
+            (await lookupBookByIsbn(book.isbn)) ??
+            (await lookupBookByTitle(book.title, book.isbn));
+          if (!metadata) continue;
+
+          const updates: Partial<BookInput> = {
+            thumbnailUrl: metadata.thumbnailUrl ?? book.thumbnailUrl,
+            volumeNumber: book.volumeNumber ?? metadata.volumeNumber,
+            seriesTitle:
+              book.seriesTitle.trim() === book.title.trim() || parseSeriesTitle(book.seriesTitle).volumeNumber
+                ? metadata.seriesTitle
+                : book.seriesTitle,
+          };
+
+          const query = client
+            .from('books')
+            .update(toBookUpdate(updates))
+            .eq('user_id', userId);
+          const { error: updateError } =
+            isUuid(book.id) || !book.isbn ? await query.eq('id', book.id) : await query.eq('isbn', book.isbn);
+
+          if (updateError) {
+            throw new Error(formatSupabaseError(updateError, 'Supabaseの更新に失敗しました。'));
+          }
+
+          setBooks((currentBooks) =>
+            currentBooks.map((currentBook) =>
+              currentBook.id === book.id ? { ...currentBook, ...updates } : currentBook,
+            ),
+          );
+        } catch (metadataError) {
+          console.warn('Failed to enrich book metadata', metadataError);
+        }
+      }
+    }
+
+    enrichBooks();
+  }, [books, configured, user]);
 
   const addBook = useCallback(async (bookInput: BookInput) => {
+    const normalizedBookInput = normalizeBookInput(bookInput);
+
+    if (configured) {
+      if (!supabase || !user) throw new Error('ログインすると蔵書を登録できます。');
+      const bookId = createUuid();
+
+      const { error: insertError } = await supabase
+        .from('books')
+        .insert(toBookInsert(normalizedBookInput, user.id, bookId));
+
+      if (insertError) {
+        throw new Error(formatSupabaseError(insertError, 'Supabaseへの登録に失敗しました。'));
+      }
+
+      const book: Book = {
+        ...normalizedBookInput,
+        id: bookId,
+        userId: user.id,
+        createdAt: now(),
+      };
+      setBooks((currentBooks) => [book, ...currentBooks]);
+      return book;
+    }
+
     const book: Book = {
-      ...bookInput,
+      ...normalizedBookInput,
       id: createId('book'),
       userId: DEMO_USER_ID,
       createdAt: now(),
@@ -122,7 +372,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
 
     setBooks((currentBooks) => [book, ...currentBooks]);
     return book;
-  }, []);
+  }, [configured, user]);
 
   const addBookByIsbn = useCallback(
     async (isbn: string) => {
@@ -134,17 +384,77 @@ export function LibraryProvider({ children }: PropsWithChildren) {
   );
 
   const updateBook = useCallback(async (bookId: string, updates: Partial<BookInput>) => {
+    const book = books.find((candidate) => candidate.id === bookId);
+
+    if (configured) {
+      if (!supabase || !user) throw new Error('ログインすると蔵書を編集できます。');
+      const query = supabase.from('books').update(toBookUpdate(updates)).eq('user_id', user.id);
+      const { error: updateError } =
+        isUuid(bookId) || !book?.isbn ? await query.eq('id', bookId) : await query.eq('isbn', book.isbn);
+
+      if (updateError) {
+        throw new Error(formatSupabaseError(updateError, 'Supabaseの更新に失敗しました。'));
+      }
+    }
+
     setBooks((currentBooks) =>
       currentBooks.map((book) => (book.id === bookId ? { ...book, ...updates } : book)),
     );
-  }, []);
+  }, [books, configured, user]);
+
+  const deleteBook = useCallback(async (bookId: string) => {
+    const book = books.find((candidate) => candidate.id === bookId);
+
+    if (configured) {
+      if (!supabase || !user) throw new Error('ログインすると蔵書を削除できます。');
+      const query = supabase.from('books').delete().eq('user_id', user.id);
+      const { error: deleteError } =
+        isUuid(bookId) || !book?.isbn ? await query.eq('id', bookId) : await query.eq('isbn', book.isbn);
+
+      if (deleteError) {
+        throw new Error(formatSupabaseError(deleteError, 'Supabaseの削除に失敗しました。'));
+      }
+    }
+
+    setBooks((currentBooks) => currentBooks.filter((book) => book.id !== bookId));
+  }, [books, configured, user]);
+
+  const repairBookMetadata = useCallback(async (bookId: string) => {
+    const book = books.find((candidate) => candidate.id === bookId);
+    if (!book) throw new Error('対象の本が見つかりません。');
+
+    const metadata =
+      (book.isbn ? await lookupBookByIsbn(book.isbn) : null) ??
+      (await lookupBookByTitle(book.title, book.isbn));
+    if (!metadata) throw new Error('書籍情報を再取得できませんでした。');
+
+    await updateBook(book.id, {
+      seriesTitle: metadata.seriesTitle,
+      volumeNumber: metadata.volumeNumber,
+      author: metadata.author ?? book.author,
+      thumbnailUrl: metadata.thumbnailUrl ?? '',
+    });
+  }, [books, updateBook]);
 
   const bulkUpdateStatus = useCallback(async (bookIds: string[], status: ReadingStatus) => {
+    if (configured) {
+      if (!supabase || !user) throw new Error('ログインするとステータスを更新できます。');
+      const { error: updateError } = await supabase
+        .from('books')
+        .update({ status })
+        .in('id', bookIds)
+        .eq('user_id', user.id);
+
+      if (updateError) {
+        throw new Error(formatSupabaseError(updateError, 'Supabaseの一括更新に失敗しました。'));
+      }
+    }
+
     const selected = new Set(bookIds);
     setBooks((currentBooks) =>
       currentBooks.map((book) => (selected.has(book.id) ? { ...book, status } : book)),
     );
-  }, []);
+  }, [configured, user]);
 
   const seriesGroups = useMemo(() => {
     const bySeries = new Map<string, Book[]>();
@@ -159,12 +469,14 @@ export function LibraryProvider({ children }: PropsWithChildren) {
         const sortedBooks = [...groupedBooks].sort(
           (a, b) => (b.volumeNumber ?? 0) - (a.volumeNumber ?? 0),
         );
+        const representative =
+          sortedBooks.find((book) => !!book.thumbnailUrl) ?? sortedBooks[0];
         const latestVolume = sortedBooks[0]?.volumeNumber;
 
         return {
           id: encodeURIComponent(title),
           title,
-          representative: sortedBooks[0],
+          representative,
           ownedCount: groupedBooks.length,
           unreadCount: groupedBooks.filter((book) => book.status === 'unread').length,
           readCount: groupedBooks.filter((book) => book.status === 'read').length,
@@ -203,14 +515,32 @@ export function LibraryProvider({ children }: PropsWithChildren) {
   const value = useMemo(
     () => ({
       books,
+      loading,
+      error,
+      requiresAuth,
       seriesGroups,
       addBook,
       addBookByIsbn,
       updateBook,
+      deleteBook,
+      repairBookMetadata,
       bulkUpdateStatus,
       getSeriesItems,
     }),
-    [addBook, addBookByIsbn, books, bulkUpdateStatus, getSeriesItems, seriesGroups, updateBook],
+    [
+      addBook,
+      addBookByIsbn,
+      books,
+      bulkUpdateStatus,
+      deleteBook,
+      error,
+      getSeriesItems,
+      loading,
+      repairBookMetadata,
+      requiresAuth,
+      seriesGroups,
+      updateBook,
+    ],
   );
 
   return <LibraryContext.Provider value={value}>{children}</LibraryContext.Provider>;

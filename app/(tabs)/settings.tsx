@@ -1,13 +1,68 @@
 import * as Notifications from 'expo-notifications';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
-import { supabase } from '../../src/lib/supabase';
+import { envStatus } from '../../src/lib/env';
+import { useAuth } from '../../src/store/AuthContext';
+import { ThemeMode, useAppTheme } from '../../src/store/ThemeContext';
+
+const themeOptions: Array<{ label: string; value: ThemeMode }> = [
+  { label: 'システム', value: 'system' },
+  { label: 'ライト', value: 'light' },
+  { label: 'ダーク', value: 'dark' },
+];
 
 export default function SettingsScreen() {
+  const { configured, initializing, user, signIn, signOut, signUp } = useAuth();
+  const { colors, mode, setMode } = useAppTheme();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authSubmitting, setAuthSubmitting] = useState(false);
   const [openExternalApp, setOpenExternalApp] = useState(false);
   const [newReleaseNotifications, setNewReleaseNotifications] = useState(false);
-  const [theme, setTheme] = useState<'system' | 'light' | 'dark'>('system');
+
+  const submitAuth = async (authMode: 'signIn' | 'signUp') => {
+    if (!email.trim() || !password) {
+      Alert.alert('BookNest', 'メールアドレスとパスワードを入力してください。');
+      return;
+    }
+
+    setAuthSubmitting(true);
+    try {
+      if (authMode === 'signIn') {
+        await signIn(email.trim(), password);
+      } else {
+        await signUp(email.trim(), password);
+        Alert.alert('BookNest', '確認メールが有効な場合は、メールを確認してください。');
+      }
+      setPassword('');
+    } catch (error) {
+      Alert.alert('BookNest', error instanceof Error ? error.message : '認証に失敗しました。');
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
+  const submitSignOut = async () => {
+    setAuthSubmitting(true);
+    try {
+      await signOut();
+    } catch (error) {
+      Alert.alert('BookNest', error instanceof Error ? error.message : 'ログアウトに失敗しました。');
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
 
   const toggleNotifications = async (value: boolean) => {
     if (value) {
@@ -20,34 +75,102 @@ export default function SettingsScreen() {
   };
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>アカウント</Text>
-        <View style={styles.row}>
-          <View>
-            <Text style={styles.rowTitle}>プロフィール</Text>
-            <Text style={styles.rowCopy}>
-              {supabase ? 'Supabase Auth が設定済みです。' : 'Supabase の環境変数を追加すると認証が有効になります。'}
-            </Text>
+    <ScrollView style={[styles.screen, { backgroundColor: colors.background }]} contentContainerStyle={styles.content}>
+      <View style={[styles.section, { borderBottomColor: colors.border }]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>アカウント</Text>
+        {initializing ? (
+          <View style={styles.loadingRow}>
+            <ActivityIndicator color={colors.text} />
           </View>
-        </View>
-        <Pressable style={styles.neutralButton}>
-          <Text style={styles.neutralButtonText}>パスワード変更</Text>
-        </Pressable>
-        <Pressable style={styles.neutralButton}>
-          <Text style={styles.neutralButtonText}>ログアウト</Text>
-        </Pressable>
-        <Pressable style={styles.dangerButton}>
-          <Text style={styles.dangerButtonText}>アカウント削除</Text>
-        </Pressable>
+        ) : user ? (
+          <>
+            <View style={styles.row}>
+              <View style={styles.rowText}>
+                <Text style={[styles.rowTitle, { color: colors.text }]}>ログイン中</Text>
+                <Text style={[styles.rowCopy, { color: colors.muted }]}>{user.email}</Text>
+              </View>
+            </View>
+            <Pressable disabled={authSubmitting} style={[styles.neutralButton, { borderColor: colors.border }]} onPress={submitSignOut}>
+              <Text style={[styles.neutralButtonText, { color: colors.text }]}>ログアウト</Text>
+            </Pressable>
+            <Pressable style={[styles.dangerButton, { borderColor: colors.danger }]}>
+              <Text style={[styles.dangerButtonText, { color: colors.danger }]}>アカウント削除</Text>
+            </Pressable>
+          </>
+        ) : (
+          <View>
+            <Text style={[styles.rowTitle, { color: colors.text }]}>プロフィール</Text>
+            <Text style={[styles.rowCopy, { color: colors.muted }]}>
+              {configured
+                ? 'Supabase Auth にログインすると蔵書がクラウド保存されます。'
+                : 'Supabase の環境変数を追加すると認証が有効になります。'}
+            </Text>
+            <TextInput
+              autoCapitalize="none"
+              keyboardType="email-address"
+              onChangeText={setEmail}
+              placeholder="メールアドレス"
+              placeholderTextColor={colors.muted}
+              style={[styles.input, { backgroundColor: colors.input, color: colors.text }]}
+              value={email}
+            />
+            <TextInput
+              onChangeText={setPassword}
+              placeholder="パスワード"
+              placeholderTextColor={colors.muted}
+              secureTextEntry
+              style={[styles.input, { backgroundColor: colors.input, color: colors.text }]}
+              value={password}
+            />
+            <View style={styles.authButtons}>
+              <Pressable
+                disabled={!configured || authSubmitting}
+                style={[
+                  styles.neutralButton,
+                  styles.authButton,
+                  { borderColor: colors.border },
+                  (!configured || authSubmitting) && styles.disabledButton,
+                ]}
+                onPress={() => submitAuth('signIn')}
+              >
+                <Text style={[styles.neutralButtonText, { color: colors.text }]}>ログイン</Text>
+              </Pressable>
+              <Pressable
+                disabled={!configured || authSubmitting}
+                style={[
+                  styles.neutralButton,
+                  styles.authButton,
+                  { borderColor: colors.border },
+                  (!configured || authSubmitting) && styles.disabledButton,
+                ]}
+                onPress={() => submitAuth('signUp')}
+              >
+                <Text style={[styles.neutralButtonText, { color: colors.text }]}>新規登録</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>外部EC</Text>
+      <View style={[styles.section, { borderBottomColor: colors.border }]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>連携設定</Text>
+        <Text style={[styles.rowCopy, { color: colors.muted }]}>
+          Supabase URL: {envStatus.hasSupabaseUrl ? '設定済み' : '未設定'}
+        </Text>
+        <Text style={[styles.rowCopy, { color: colors.muted }]}>
+          Supabase Anon Key: {envStatus.hasSupabaseAnonKey ? '設定済み' : '未設定'}
+        </Text>
+        <Text style={[styles.rowCopy, { color: colors.muted }]}>
+          Google Books API Key: {envStatus.hasGoogleBooksApiKey ? '設定済み' : '未設定'}
+        </Text>
+      </View>
+
+      <View style={[styles.section, { borderBottomColor: colors.border }]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>外部EC</Text>
         <View style={styles.row}>
           <View style={styles.rowText}>
-            <Text style={styles.rowTitle}>外部アプリで直接開く</Text>
-            <Text style={styles.rowCopy}>
+            <Text style={[styles.rowTitle, { color: colors.text }]}>外部アプリで直接開く</Text>
+            <Text style={[styles.rowCopy, { color: colors.muted }]}>
               ONは購入アプリへ直接遷移、OFFはBookNest内ブラウザで開きます。
             </Text>
           </View>
@@ -60,12 +183,12 @@ export default function SettingsScreen() {
         </View>
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>通知</Text>
+      <View style={[styles.section, { borderBottomColor: colors.border }]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>通知</Text>
         <View style={styles.row}>
           <View style={styles.rowText}>
-            <Text style={styles.rowTitle}>新刊通知</Text>
-            <Text style={styles.rowCopy}>
+            <Text style={[styles.rowTitle, { color: colors.text }]}>新刊通知</Text>
+            <Text style={[styles.rowCopy, { color: colors.muted }]}>
               Supabase Cronで登録シリーズを監視し、Expoプッシュ通知を送れます。
             </Text>
           </View>
@@ -78,17 +201,17 @@ export default function SettingsScreen() {
         </View>
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>表示</Text>
-        <View style={styles.segmented}>
-          {(['system', 'light', 'dark'] as const).map((option) => (
+      <View style={[styles.section, { borderBottomColor: colors.border }]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>表示</Text>
+        <View style={[styles.segmented, { backgroundColor: colors.elevated }]}>
+          {themeOptions.map((option) => (
             <Pressable
-              key={option}
-              onPress={() => setTheme(option)}
-              style={[styles.segment, theme === option && styles.segmentActive]}
+              key={option.value}
+              onPress={() => setMode(option.value)}
+              style={[styles.segment, mode === option.value && { backgroundColor: colors.text }]}
             >
-              <Text style={[styles.segmentText, theme === option && styles.segmentTextActive]}>
-                {option === 'system' ? 'システム' : option === 'light' ? 'ライト' : 'ダーク'}
+              <Text style={[styles.segmentText, { color: mode === option.value ? colors.background : colors.muted }]}>
+                {option.label}
               </Text>
             </Pressable>
           ))}
@@ -99,42 +222,48 @@ export default function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { backgroundColor: '#ffffff', flex: 1 },
+  screen: { flex: 1 },
   content: { gap: 18, padding: 18, paddingBottom: 40 },
-  section: { borderBottomColor: '#e5e5e5', borderBottomWidth: 1, paddingBottom: 18 },
-  sectionTitle: { color: '#111111', fontSize: 18, fontWeight: '800', marginBottom: 12 },
+  section: { borderBottomWidth: 1, paddingBottom: 18 },
+  sectionTitle: { fontSize: 18, fontWeight: '800', marginBottom: 12 },
   row: { alignItems: 'center', flexDirection: 'row', gap: 12, minHeight: 56 },
   rowText: { flex: 1 },
-  rowTitle: { color: '#111111', fontSize: 15, fontWeight: '800' },
-  rowCopy: { color: '#666666', fontSize: 13, lineHeight: 18, marginTop: 3 },
+  rowTitle: { fontSize: 15, fontWeight: '800' },
+  rowCopy: { fontSize: 13, lineHeight: 18, marginTop: 3 },
+  loadingRow: { alignItems: 'center', height: 56, justifyContent: 'center' },
+  input: {
+    borderRadius: 8,
+    fontSize: 16,
+    height: 44,
+    marginTop: 10,
+    paddingHorizontal: 12,
+  },
+  authButtons: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  authButton: { flex: 1, marginTop: 0 },
+  disabledButton: { opacity: 0.35 },
   neutralButton: {
     alignItems: 'center',
-    borderColor: '#d4d4d4',
     borderRadius: 8,
     borderWidth: 1,
     height: 44,
     justifyContent: 'center',
     marginTop: 10,
   },
-  neutralButtonText: { color: '#111111', fontSize: 14, fontWeight: '800' },
+  neutralButtonText: { fontSize: 14, fontWeight: '800' },
   dangerButton: {
     alignItems: 'center',
-    borderColor: '#ff3b30',
     borderRadius: 8,
     borderWidth: 1,
     height: 44,
     justifyContent: 'center',
     marginTop: 10,
   },
-  dangerButtonText: { color: '#ff3b30', fontSize: 14, fontWeight: '800' },
+  dangerButtonText: { fontSize: 14, fontWeight: '800' },
   segmented: {
-    backgroundColor: '#f3f3f3',
     borderRadius: 8,
     flexDirection: 'row',
     padding: 4,
   },
   segment: { alignItems: 'center', borderRadius: 6, flex: 1, height: 38, justifyContent: 'center' },
-  segmentActive: { backgroundColor: '#111111' },
-  segmentText: { color: '#555555', fontSize: 13, fontWeight: '800' },
-  segmentTextActive: { color: '#ffffff' },
+  segmentText: { fontSize: 13, fontWeight: '800' },
 });

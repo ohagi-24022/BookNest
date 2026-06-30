@@ -1,7 +1,6 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useCallback, useRef, useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -9,13 +8,14 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  ToastAndroid,
   View,
 } from 'react-native';
 
+import { isBookIsbnBarcode, lookupBookByIsbn } from '../../src/lib/bookApis';
 import { parseSeriesTitle } from '../../src/lib/series';
 import { useLibrary } from '../../src/store/LibraryContext';
-import { ReadingStatus } from '../../src/types';
+import { useAppTheme } from '../../src/store/ThemeContext';
+import { BookInput, ReadingStatus } from '../../src/types';
 
 const statusOptions: Array<{ label: string; value: ReadingStatus }> = [
   { label: '未読', value: 'unread' },
@@ -23,20 +23,27 @@ const statusOptions: Array<{ label: string; value: ReadingStatus }> = [
   { label: '読了', value: 'read' },
 ];
 
-function notify(message: string) {
-  if (Platform.OS === 'android') {
-    ToastAndroid.show(message, ToastAndroid.SHORT);
-  } else {
-    Alert.alert('BookNest', message);
-  }
+type ScanNotice = {
+  tone: 'neutral' | 'success' | 'warning' | 'error';
+  message: string;
+};
+
+function normalizeBarcode(data: string) {
+  return data.replace(/[^0-9X]/gi, '').toUpperCase();
 }
 
 export default function ScanScreen() {
   const [permission, requestPermission] = useCameraPermissions();
-  const { addBook, addBookByIsbn } = useLibrary();
+  const { addBook } = useLibrary();
+  const { colors } = useAppTheme();
   const [isScanning, setIsScanning] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const lastScanRef = useRef('');
+  const [notice, setNotice] = useState<ScanNotice>({
+    tone: 'neutral',
+    message: 'ISBNバーコードを枠内に入れてください。',
+  });
+  const lastScanRef = useRef<{ isbn: string; at: number }>({ isbn: '', at: 0 });
+  const processingRef = useRef(false);
 
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
@@ -52,55 +59,175 @@ export default function ScanScreen() {
     setVolumeNumber((current) => current || (parsed.volumeNumber ? String(parsed.volumeNumber) : ''));
   };
 
+  const applyLookupResult = (bookInput: BookInput | null) => {
+    if (!bookInput) return;
+
+    setTitle(bookInput.title);
+    setAuthor(bookInput.author ?? '');
+    setSeriesTitle(bookInput.seriesTitle);
+    setVolumeNumber(bookInput.volumeNumber ? String(bookInput.volumeNumber) : '');
+    setIsbn(bookInput.isbn ?? '');
+    setStatus(bookInput.status);
+  };
+
+  const lookupManualIsbn = async () => {
+    const normalized = normalizeBarcode(isbn);
+    if (!isBookIsbnBarcode(normalized)) {
+      setNotice({
+        tone: 'warning',
+        message: normalized
+          ? '有効なISBNを入力してください。978または979で始まる13桁のISBNを推奨します。'
+          : 'ISBNを入力してください。',
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+    setNotice({ tone: 'neutral', message: `${normalized} を検索しています。` });
+
+    try {
+      const bookInput = await lookupBookByIsbn(normalized);
+      if (!bookInput) {
+        setNotice({ tone: 'warning', message: '書籍データが見つかりませんでした。' });
+        return;
+      }
+
+      applyLookupResult(bookInput);
+      setNotice({ tone: 'success', message: `${bookInput.title} を入力フォームに反映しました。` });
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error ? `検索に失敗しました: ${error.message}` : '検索に失敗しました。',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleBarcode = useCallback(
     async ({ data }: { data: string }) => {
-      const normalized = data.replace(/[^0-9X]/gi, '');
-      if (!isScanning || isSubmitting || normalized === lastScanRef.current) return;
+      const normalized = normalizeBarcode(data);
+      const now = Date.now();
+      const wasJustScanned =
+        lastScanRef.current.isbn === normalized && now - lastScanRef.current.at < 5000;
+
+      if (!isScanning || processingRef.current || wasJustScanned) return;
       if (normalized.length !== 10 && normalized.length !== 13) return;
 
-      lastScanRef.current = normalized;
+      lastScanRef.current = { isbn: normalized, at: now };
+
+      if (!isBookIsbnBarcode(normalized)) {
+        setNotice({
+          tone: 'warning',
+          message:
+            normalized.startsWith('192')
+              ? `${normalized} は分類・価格コードです。978または979で始まるISBNバーコードを読み取ってください。`
+              : `${normalized} は有効なISBNとして認識できませんでした。`,
+        });
+        return;
+      }
+
+      processingRef.current = true;
       setIsSubmitting(true);
+      setNotice({ tone: 'neutral', message: `${normalized} を検索しています。` });
+
       try {
-        const book = await addBookByIsbn(normalized);
-        notify(book ? `${book.title} を追加しました` : '書籍データが見つかりません。手動登録してください。');
-      } catch {
-        notify('検索に失敗しました。手動登録できます。');
+        const bookInput = await lookupBookByIsbn(normalized);
+        if (bookInput) {
+          applyLookupResult({ ...bookInput, isbn: bookInput.isbn ?? normalized });
+
+          try {
+            const book = await addBook(bookInput);
+            setNotice({ tone: 'success', message: `${book.title} を追加しました。` });
+          } catch (error) {
+            setNotice({
+              tone: 'warning',
+              message:
+                error instanceof Error
+                  ? `書籍は見つかりましたが登録できませんでした: ${error.message}`
+                  : '書籍は見つかりましたが登録できませんでした。ログイン状態を確認してください。',
+            });
+          }
+          return;
+        }
+
+        setIsbn(normalized);
+        setNotice({
+          tone: 'warning',
+          message: '書籍データが見つかりませんでした。下の手動登録にISBNを入れました。',
+        });
+      } catch (error) {
+        setIsbn(normalized);
+        setNotice({
+          tone: 'error',
+          message:
+            error instanceof Error
+              ? `検索に失敗しました: ${error.message}`
+              : '検索に失敗しました。通信状態を確認してください。',
+        });
       } finally {
         setIsSubmitting(false);
         setTimeout(() => {
-          lastScanRef.current = '';
-        }, 1600);
+          processingRef.current = false;
+        }, 1200);
       }
     },
-    [addBookByIsbn, isScanning, isSubmitting],
+    [addBook, isScanning],
   );
 
   const submitManual = async () => {
     if (!title.trim() || !seriesTitle.trim()) {
-      notify('タイトルとシリーズ名は必須です。');
+      setNotice({ tone: 'warning', message: 'タイトルとシリーズ名は必須です。' });
       return;
     }
 
-    await addBook({
-      isbn: isbn.trim() || undefined,
-      title: title.trim(),
-      author: author.trim() || undefined,
-      seriesTitle: seriesTitle.trim(),
-      volumeNumber: volumeNumber ? Number.parseInt(volumeNumber, 10) : undefined,
-      status,
-    });
+    try {
+      await addBook({
+        isbn: isbn.trim() || undefined,
+        title: title.trim(),
+        author: author.trim() || undefined,
+        seriesTitle: seriesTitle.trim(),
+        volumeNumber: volumeNumber ? Number.parseInt(volumeNumber, 10) : undefined,
+        status,
+      });
 
-    setTitle('');
-    setAuthor('');
-    setSeriesTitle('');
-    setVolumeNumber('');
-    setIsbn('');
-    setStatus('unread');
-    notify('書籍を追加しました');
+      setTitle('');
+      setAuthor('');
+      setSeriesTitle('');
+      setVolumeNumber('');
+      setIsbn('');
+      setStatus('unread');
+      setNotice({ tone: 'success', message: '書籍を追加しました。' });
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : '登録に失敗しました。',
+      });
+    }
   };
 
+  const noticeColor =
+    notice.tone === 'success'
+      ? '#e8f7ee'
+      : notice.tone === 'warning'
+        ? '#fff7df'
+        : notice.tone === 'error'
+          ? '#ffeceb'
+          : colors.elevated;
+  const noticeTextColor =
+    notice.tone === 'success'
+      ? '#128a3f'
+      : notice.tone === 'warning'
+        ? '#765100'
+        : notice.tone === 'error'
+          ? colors.danger
+          : colors.text;
+
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.screen}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={[styles.screen, { backgroundColor: colors.background }]}
+    >
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.cameraShell}>
           {permission?.granted ? (
@@ -109,57 +236,104 @@ export default function ScanScreen() {
               onBarcodeScanned={handleBarcode}
               style={styles.camera}
             >
-              <View style={styles.scanFrame} />
+              <View style={[styles.scanFrame, { borderColor: colors.primary }]} />
             </CameraView>
           ) : (
             <View style={styles.permissionBox}>
               <Text style={styles.permissionText}>ISBNスキャンにはカメラ権限が必要です。</Text>
-              <Pressable style={styles.primaryButton} onPress={requestPermission}>
+              <Pressable style={[styles.primaryButton, { backgroundColor: colors.primary }]} onPress={requestPermission}>
                 <Text style={styles.primaryButtonText}>カメラを許可</Text>
               </Pressable>
             </View>
           )}
         </View>
 
+        <View style={[styles.notice, { backgroundColor: noticeColor }]}>
+          <Text style={[styles.noticeText, { color: noticeTextColor }]}>{notice.message}</Text>
+        </View>
+
         <View style={styles.scanControls}>
           <Pressable
+            disabled={isSubmitting}
             onPress={() => setIsScanning((value) => !value)}
-            style={[styles.primaryButton, !isScanning && styles.pausedButton]}
+            style={[
+              styles.primaryButton,
+              { backgroundColor: isScanning ? colors.primary : colors.text },
+              isSubmitting && styles.disabled,
+            ]}
           >
-            <Text style={styles.primaryButtonText}>{isScanning ? 'スキャン停止' : 'スキャン再開'}</Text>
+            <Text style={styles.primaryButtonText}>
+              {isSubmitting ? '検索中' : isScanning ? 'スキャン停止' : 'スキャン再開'}
+            </Text>
           </Pressable>
         </View>
 
-        <View style={styles.form}>
-          <Text style={styles.sectionTitle}>手動登録</Text>
-          <TextInput value={title} onChangeText={onTitleChange} placeholder="タイトル" style={styles.input} />
-          <TextInput value={seriesTitle} onChangeText={setSeriesTitle} placeholder="シリーズ名" style={styles.input} />
+        <View style={[styles.form, { borderTopColor: colors.border }]}>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>手動登録</Text>
+          <TextInput
+            value={title}
+            onChangeText={onTitleChange}
+            placeholder="タイトル"
+            placeholderTextColor={colors.muted}
+            style={[styles.input, { backgroundColor: colors.input, color: colors.text }]}
+          />
+          <TextInput
+            value={seriesTitle}
+            onChangeText={setSeriesTitle}
+            placeholder="シリーズ名"
+            placeholderTextColor={colors.muted}
+            style={[styles.input, { backgroundColor: colors.input, color: colors.text }]}
+          />
           <View style={styles.inputRow}>
             <TextInput
               value={volumeNumber}
               onChangeText={setVolumeNumber}
               keyboardType="number-pad"
               placeholder="巻"
-              style={[styles.input, styles.compactInput]}
+              placeholderTextColor={colors.muted}
+              style={[styles.input, styles.compactInput, { backgroundColor: colors.input, color: colors.text }]}
             />
-            <TextInput value={isbn} onChangeText={setIsbn} placeholder="ISBN" style={[styles.input, styles.flexInput]} />
+            <TextInput
+              value={isbn}
+              onChangeText={setIsbn}
+              placeholder="ISBN"
+              placeholderTextColor={colors.muted}
+              style={[styles.input, styles.flexInput, { backgroundColor: colors.input, color: colors.text }]}
+            />
+            <Pressable
+              disabled={isSubmitting}
+              onPress={lookupManualIsbn}
+              style={[styles.lookupButton, { backgroundColor: colors.primary }, isSubmitting && styles.disabled]}
+            >
+              <Text style={styles.lookupButtonText}>検索</Text>
+            </Pressable>
           </View>
-          <TextInput value={author} onChangeText={setAuthor} placeholder="著者" style={styles.input} />
+          <TextInput
+            value={author}
+            onChangeText={setAuthor}
+            placeholder="著者"
+            placeholderTextColor={colors.muted}
+            style={[styles.input, { backgroundColor: colors.input, color: colors.text }]}
+          />
           <View style={styles.statusRow}>
             {statusOptions.map((option) => (
               <Pressable
                 key={option.value}
                 onPress={() => setStatus(option.value)}
-                style={[styles.statusButton, status === option.value && styles.statusButtonActive]}
+                style={[
+                  styles.statusButton,
+                  { borderColor: colors.border },
+                  status === option.value && { backgroundColor: colors.text, borderColor: colors.text },
+                ]}
               >
-                <Text style={[styles.statusText, status === option.value && styles.statusTextActive]}>
+                <Text style={[styles.statusText, { color: status === option.value ? colors.background : colors.muted }]}>
                   {option.label}
                 </Text>
               </Pressable>
             ))}
           </View>
-          <Pressable style={styles.submitButton} onPress={submitManual}>
-            <Text style={styles.submitButtonText}>追加</Text>
+          <Pressable style={[styles.submitButton, { backgroundColor: colors.text }]} onPress={submitManual}>
+            <Text style={[styles.submitButtonText, { color: colors.background }]}>追加</Text>
           </Pressable>
         </View>
       </ScrollView>
@@ -168,7 +342,7 @@ export default function ScanScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#ffffff' },
+  screen: { flex: 1 },
   content: { padding: 18, paddingBottom: 40 },
   cameraShell: {
     aspectRatio: 0.74,
@@ -179,7 +353,6 @@ const styles = StyleSheet.create({
   camera: { flex: 1, justifyContent: 'center', padding: 32 },
   scanFrame: {
     alignSelf: 'center',
-    borderColor: '#0a84ff',
     borderRadius: 8,
     borderWidth: 3,
     height: 140,
@@ -187,22 +360,21 @@ const styles = StyleSheet.create({
   },
   permissionBox: { alignItems: 'center', flex: 1, justifyContent: 'center', padding: 24 },
   permissionText: { color: '#ffffff', fontSize: 15, marginBottom: 16, textAlign: 'center' },
+  notice: { borderRadius: 8, marginTop: 12, minHeight: 44, padding: 12 },
+  noticeText: { fontSize: 13, fontWeight: '700', lineHeight: 18 },
   scanControls: { paddingVertical: 14 },
   primaryButton: {
     alignItems: 'center',
-    backgroundColor: '#0a84ff',
     borderRadius: 8,
     height: 46,
     justifyContent: 'center',
   },
-  pausedButton: { backgroundColor: '#111111' },
+  disabled: { opacity: 0.55 },
   primaryButtonText: { color: '#ffffff', fontSize: 15, fontWeight: '800' },
-  form: { borderTopColor: '#e5e5e5', borderTopWidth: 1, paddingTop: 18 },
-  sectionTitle: { color: '#111111', fontSize: 18, fontWeight: '800', marginBottom: 12 },
+  form: { borderTopWidth: 1, paddingTop: 18 },
+  sectionTitle: { fontSize: 18, fontWeight: '800', marginBottom: 12 },
   input: {
-    backgroundColor: '#f4f4f4',
     borderRadius: 8,
-    color: '#111111',
     fontSize: 16,
     height: 46,
     marginBottom: 10,
@@ -211,24 +383,28 @@ const styles = StyleSheet.create({
   inputRow: { flexDirection: 'row', gap: 10 },
   compactInput: { width: 82 },
   flexInput: { flex: 1 },
+  lookupButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    height: 46,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  lookupButtonText: { color: '#ffffff', fontSize: 13, fontWeight: '800' },
   statusRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
   statusButton: {
-    borderColor: '#d4d4d4',
     borderRadius: 8,
     borderWidth: 1,
     flex: 1,
     height: 40,
     justifyContent: 'center',
   },
-  statusButtonActive: { backgroundColor: '#111111', borderColor: '#111111' },
-  statusText: { color: '#444444', fontSize: 13, fontWeight: '700', textAlign: 'center' },
-  statusTextActive: { color: '#ffffff' },
+  statusText: { fontSize: 13, fontWeight: '700', textAlign: 'center' },
   submitButton: {
     alignItems: 'center',
-    backgroundColor: '#111111',
     borderRadius: 8,
     height: 48,
     justifyContent: 'center',
   },
-  submitButtonText: { color: '#ffffff', fontSize: 15, fontWeight: '800' },
+  submitButtonText: { fontSize: 15, fontWeight: '800' },
 });

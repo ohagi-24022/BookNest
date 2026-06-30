@@ -1,18 +1,19 @@
 import { Link } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
-  Image,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
-  useColorScheme,
   View,
 } from 'react-native';
 
+import { BookCover } from '../../src/components/BookCover';
 import { useLibrary } from '../../src/store/LibraryContext';
-import { ReadingStatus } from '../../src/types';
+import { useAppTheme } from '../../src/store/ThemeContext';
+import { Book, ReadingStatus } from '../../src/types';
 
 const filters: Array<{ label: string; value: ReadingStatus | 'all' }> = [
   { label: 'すべて', value: 'all' },
@@ -22,10 +23,10 @@ const filters: Array<{ label: string; value: ReadingStatus | 'all' }> = [
 ];
 
 export default function HomeScreen() {
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
-  const { seriesGroups } = useLibrary();
+  const { colors } = useAppTheme();
+  const { books, error, loading, requiresAuth, seriesGroups } = useLibrary();
   const [filter, setFilter] = useState<ReadingStatus | 'all'>('all');
+  const [viewMode, setViewMode] = useState<'series' | 'books'>('series');
   const [query, setQuery] = useState('');
 
   const visibleGroups = useMemo(
@@ -41,114 +42,238 @@ export default function HomeScreen() {
       }),
     [filter, query, seriesGroups],
   );
+  const visibleBooks = useMemo(
+    () =>
+      books.filter((book) => {
+        const matchesFilter = filter === 'all' || book.status === filter;
+        const keyword = query.toLowerCase();
+        const matchesQuery =
+          book.title.toLowerCase().includes(keyword) ||
+          book.seriesTitle.toLowerCase().includes(keyword) ||
+          (book.author?.toLowerCase().includes(keyword) ?? false);
+        return matchesFilter && matchesQuery;
+      }),
+    [books, filter, query],
+  );
+
+  const renderCover = (book: Book) => (
+    <BookCover thumbnailUrl={book.thumbnailUrl} isbn={book.isbn} style={styles.cover} />
+  );
+  const listVersion = `${books.length}-${seriesGroups.length}-${filter}-${query}`;
 
   return (
-    <View style={[styles.screen, isDark && styles.screenDark]}>
+    <View style={[styles.screen, { backgroundColor: colors.background }]}>
       <View style={styles.header}>
-        <Text style={[styles.title, isDark && styles.textLight]}>BookNest</Text>
-        <Text style={[styles.subtitle, isDark && styles.textMutedDark]}>
-          {seriesGroups.length} シリーズを管理中
+        <Text style={[styles.title, { color: colors.text }]}>BookNest</Text>
+        <Text style={[styles.subtitle, { color: colors.muted }]}>
+          {requiresAuth
+            ? '設定からログインしてください'
+            : `${seriesGroups.length} シリーズ / ${books.length} 冊`}
         </Text>
       </View>
+
+      {loading && (
+        <View style={[styles.notice, { backgroundColor: colors.elevated }]}>
+          <ActivityIndicator color={colors.text} />
+          <Text style={[styles.noticeText, { color: colors.text }]}>蔵書を読み込んでいます</Text>
+        </View>
+      )}
+
+      {!!error && (
+        <View style={[styles.notice, { backgroundColor: '#ffeceb' }]}>
+          <Text style={[styles.noticeText, { color: colors.danger }]}>{error}</Text>
+        </View>
+      )}
 
       <TextInput
         value={query}
         onChangeText={setQuery}
         placeholder="シリーズを検索"
-        placeholderTextColor="#8a8a8a"
-        style={[styles.search, isDark && styles.searchDark]}
+        placeholderTextColor={colors.muted}
+        style={[styles.search, { backgroundColor: colors.input, color: colors.text }]}
       />
+
+      <View style={[styles.modeSwitch, { backgroundColor: colors.elevated }]}>
+        {[
+          ['series', 'シリーズ'],
+          ['books', '全冊'],
+        ].map(([value, label]) => (
+          <Pressable
+            key={value}
+            onPress={() => setViewMode(value as 'series' | 'books')}
+            style={[styles.modeButton, viewMode === value && { backgroundColor: colors.text }]}
+          >
+            <Text style={[styles.modeText, { color: viewMode === value ? colors.background : colors.muted }]}>
+              {label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
 
       <View style={styles.filterRow}>
         {filters.map((item) => (
           <Pressable
             key={item.value}
             onPress={() => setFilter(item.value)}
-            style={[styles.filterButton, filter === item.value && styles.filterButtonActive]}
+            style={[
+              styles.filterButton,
+              { borderColor: colors.border },
+              filter === item.value && { backgroundColor: colors.text, borderColor: colors.text },
+            ]}
           >
-            <Text style={[styles.filterText, filter === item.value && styles.filterTextActive]}>
+            <Text style={[styles.filterText, { color: filter === item.value ? colors.background : colors.muted }]}>
               {item.label}
             </Text>
           </Pressable>
         ))}
       </View>
 
-      <FlatList
-        data={visibleGroups}
-        keyExtractor={(item) => item.id}
-        numColumns={2}
-        columnWrapperStyle={styles.gridRow}
-        contentContainerStyle={styles.grid}
-        renderItem={({ item }) => (
-          <Link href={`/series/${encodeURIComponent(item.title)}`} asChild>
-            <Pressable style={[styles.seriesCard, isDark && styles.seriesCardDark]}>
-              <Image source={{ uri: item.representative.thumbnailUrl }} style={styles.cover} />
-              <View style={styles.cardBody}>
-                <Text numberOfLines={2} style={[styles.seriesTitle, isDark && styles.textLight]}>
-                  {item.title}
-                </Text>
-                <Text style={[styles.meta, isDark && styles.textMutedDark]}>
-                  {item.ownedCount} 冊所持
-                  {item.latestVolume ? ` / Vol. ${item.latestVolume}` : ''}
-                </Text>
-                <View style={styles.statusRow}>
-                  {item.unreadCount > 0 && <Text style={styles.unreadBadge}>積読 {item.unreadCount}</Text>}
-                  {item.readCount === item.ownedCount && <Text style={styles.readBadge}>読了</Text>}
+      {viewMode === 'series' ? (
+        <FlatList
+          key="series-grid"
+          data={visibleGroups}
+          extraData={listVersion}
+          keyExtractor={(item) => item.id}
+          numColumns={2}
+          columnWrapperStyle={styles.gridRow}
+          contentContainerStyle={styles.grid}
+          renderItem={({ item }) => (
+            <Link href={`/series/${encodeURIComponent(item.title)}`} asChild>
+              <Pressable style={[styles.seriesCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                {renderCover(item.representative)}
+                <View style={styles.cardBody}>
+                  <Text numberOfLines={2} style={[styles.seriesTitle, { color: colors.text }]}>
+                    {item.title}
+                  </Text>
+                  <Text style={[styles.meta, { color: colors.muted }]}>
+                    {item.ownedCount} 冊所持
+                    {item.latestVolume ? ` / ${item.latestVolume}巻まで` : ''}
+                  </Text>
+                  <View style={styles.statusRow}>
+                    {item.unreadCount > 0 && <Text style={styles.unreadBadge}>積読 {item.unreadCount}</Text>}
+                    {item.readCount === item.ownedCount && <Text style={styles.readBadge}>読了</Text>}
+                  </View>
                 </View>
+              </Pressable>
+            </Link>
+          )}
+          ListEmptyComponent={
+          !loading ? (
+            <View style={styles.empty}>
+              <Text style={[styles.emptyTitle, { color: colors.text }]}>
+                {requiresAuth ? 'ログイン待ちです' : 'まだ本がありません'}
+              </Text>
+              <Text style={[styles.emptyCopy, { color: colors.muted }]}>
+                {requiresAuth
+                  ? '設定タブでSupabase Authにログインすると、本棚が同期されます。'
+                  : '中央タブからISBNをスキャンするか、手動登録してください。'}
+              </Text>
+            </View>
+          ) : null
+        }
+        />
+      ) : (
+        <FlatList
+          key="books-list"
+          data={visibleBooks}
+          extraData={listVersion}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.bookList}
+          renderItem={({ item }) => (
+            <Link href={`/series/${encodeURIComponent(item.seriesTitle)}`} asChild>
+              <Pressable style={[styles.bookRow, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <BookCover thumbnailUrl={item.thumbnailUrl} isbn={item.isbn} style={styles.rowCover} />
+                <View style={styles.bookRowBody}>
+                  <Text numberOfLines={2} style={[styles.bookTitle, { color: colors.text }]}>
+                    {item.title}
+                  </Text>
+                  <Text style={[styles.meta, { color: colors.muted }]} numberOfLines={2}>
+                    {item.seriesTitle}
+                    {item.volumeNumber ? ` / ${item.volumeNumber}巻` : ''}
+                  </Text>
+                </View>
+              </Pressable>
+            </Link>
+          )}
+          ListEmptyComponent={
+            !loading ? (
+              <View style={styles.empty}>
+                <Text style={[styles.emptyTitle, { color: colors.text }]}>表示できる本がありません</Text>
               </View>
-            </Pressable>
-          </Link>
-        )}
-      />
+            ) : null
+          }
+        />
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#ffffff', paddingHorizontal: 18 },
-  screenDark: { backgroundColor: '#050505' },
+  screen: { flex: 1, paddingHorizontal: 18 },
   header: { paddingTop: 18, paddingBottom: 16 },
-  title: { color: '#050505', fontSize: 30, fontWeight: '800', letterSpacing: 0 },
-  subtitle: { color: '#666666', fontSize: 14, marginTop: 4 },
-  textLight: { color: '#f5f5f5' },
-  textMutedDark: { color: '#a3a3a3' },
+  title: { fontSize: 30, fontWeight: '800', letterSpacing: 0 },
+  subtitle: { fontSize: 14, marginTop: 4 },
   search: {
-    backgroundColor: '#f3f3f3',
     borderRadius: 8,
-    color: '#111111',
     fontSize: 16,
     height: 44,
     paddingHorizontal: 14,
   },
-  searchDark: { backgroundColor: '#171717', color: '#f5f5f5' },
+  modeSwitch: {
+    borderRadius: 8,
+    flexDirection: 'row',
+    marginTop: 12,
+    padding: 4,
+  },
+  modeButton: { alignItems: 'center', borderRadius: 6, flex: 1, height: 36, justifyContent: 'center' },
+  modeText: { fontSize: 13, fontWeight: '800' },
+  notice: {
+    alignItems: 'center',
+    borderRadius: 8,
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 12,
+    minHeight: 44,
+    paddingHorizontal: 12,
+  },
+  noticeText: { flex: 1, fontSize: 13, fontWeight: '700' },
   filterRow: { flexDirection: 'row', gap: 8, paddingVertical: 14 },
   filterButton: {
-    borderColor: '#d4d4d4',
     borderRadius: 8,
     borderWidth: 1,
     height: 36,
     justifyContent: 'center',
     paddingHorizontal: 12,
   },
-  filterButtonActive: { backgroundColor: '#111111', borderColor: '#111111' },
-  filterText: { color: '#444444', fontSize: 13, fontWeight: '700' },
-  filterTextActive: { color: '#ffffff' },
-  grid: { paddingBottom: 24 },
+  filterText: { fontSize: 13, fontWeight: '700' },
+  grid: { paddingBottom: 110 },
   gridRow: { gap: 14 },
+  bookList: { paddingBottom: 110 },
   seriesCard: {
-    backgroundColor: '#ffffff',
-    borderColor: '#e5e5e5',
     borderRadius: 8,
     borderWidth: 1,
     flex: 1,
     marginBottom: 14,
     overflow: 'hidden',
   },
-  seriesCardDark: { backgroundColor: '#111111', borderColor: '#262626' },
   cover: { aspectRatio: 0.68, backgroundColor: '#e5e5e5', width: '100%' },
+  coverFallback: { alignItems: 'center', justifyContent: 'center' },
+  coverFallbackText: { color: '#777777', fontSize: 12, fontWeight: '800' },
+  rowCover: { backgroundColor: '#e5e5e5', borderRadius: 4, height: 96, width: 66 },
   cardBody: { minHeight: 100, padding: 10 },
-  seriesTitle: { color: '#111111', fontSize: 15, fontWeight: '800', lineHeight: 19 },
-  meta: { color: '#666666', fontSize: 12, marginTop: 6 },
+  seriesTitle: { fontSize: 15, fontWeight: '800', lineHeight: 19 },
+  bookRow: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 10,
+    padding: 10,
+  },
+  bookRowBody: { flex: 1 },
+  bookTitle: { fontSize: 16, fontWeight: '800', lineHeight: 21 },
+  meta: { fontSize: 12, marginTop: 6 },
   statusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
   unreadBadge: {
     backgroundColor: '#f5f5f5',
@@ -168,4 +293,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 4,
   },
+  empty: { alignItems: 'center', paddingHorizontal: 20, paddingTop: 64 },
+  emptyTitle: { fontSize: 18, fontWeight: '800' },
+  emptyCopy: { fontSize: 14, lineHeight: 20, marginTop: 8, textAlign: 'center' },
 });

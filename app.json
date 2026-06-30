@@ -1,25 +1,33 @@
 {
   "expo": {
     "name": "BookNest",
-    "slug": "BookNest",
+    "slug": "booknest",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
+    "scheme": "booknest",
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.booknest.app",
       "infoPlist": {
-        "NSCameraUsageDescription": "ISBNバーコードを読み取って書籍を登録します。"
+        "NSCameraUsageDescription": "ISBN barcode scanning is used to register books.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
+      "package": "com.booknest.app",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#ffffff",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.POST_NOTIFICATIONS"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -30,7 +38,9 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "ISBNバーコードを読み取って書籍を登録します。"
+          "cameraPermission": "ISBN barcode scanning is used to register books.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
         }
       ],
       [
@@ -39,6 +49,12 @@
           "defaultChannel": "new-releases"
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "f9d01088-83a6-467c-b384-76e03bc3bc6d"
+      },
+      "router": {}
+    }
   }
 }

@@ -5,27 +5,38 @@
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
     "@supabase/supabase-js": "^2.108.2",
-    "expo": "~56.0.12",
-    "expo-camera": "~56.0.8",
-    "expo-notifications": "~56.0.18",
-    "expo-router": "~56.2.11",
-    "expo-status-bar": "~56.0.4",
-    "expo-web-browser": "~56.0.5",
-    "react": "19.2.3",
-    "react-native": "0.85.3",
-    "react-native-gesture-handler": "~2.31.1",
-    "react-native-safe-area-context": "~5.7.0",
-    "react-native-screens": "4.25.2"
+    "expo": "~54.0.0",
+    "expo-camera": "~17.0.10",
+    "expo-constants": "~18.0.10",
+    "expo-dev-client": "~6.0.21",
+    "expo-linking": "~8.0.12",
+    "expo-notifications": "~0.32.17",
+    "expo-router": "~6.0.24",
+    "expo-status-bar": "~3.0.9",
+    "expo-web-browser": "~15.0.11",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-gesture-handler": "~2.28.0",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0",
+    "react-native-url-polyfill": "^3.0.0"
   },
   "devDependencies": {
-    "@types/react": "~19.2.2",
-    "typescript": "~6.0.3"
+    "@types/react": "~19.1.10",
+    "eas-cli": "^20.4.0",
+    "typescript": "~5.9.2"
   },
   "scripts": {
     "start": "expo start",
+    "start:go": "expo start --go",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "eas:configure": "eas build:configure",
+    "eas:build:dev": "eas build --profile development",
+    "eas:build:preview:android": "eas build --profile preview --platform android",
+    "eas:build:production": "eas build --profile production",
+    "eas:submit:production": "eas submit --profile production"
   },
   "private": true
 }
