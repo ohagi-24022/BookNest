@@ -4,6 +4,7 @@ import { parseSeriesTitle } from './series';
 
 type GoogleBooksResponse = {
   items?: Array<{
+    id?: string;
     volumeInfo?: {
       title?: string;
       authors?: string[];
@@ -41,6 +42,19 @@ type OpenBdResponse = Array<{
   };
 } | null>;
 
+type RakutenBooksResponse = {
+  Items?: Array<{
+    Item?: {
+      title?: string;
+      author?: string;
+      isbn?: string;
+      largeImageUrl?: string;
+      mediumImageUrl?: string;
+      smallImageUrl?: string;
+    };
+  }>;
+};
+
 function normalizeIsbn(isbn: string) {
   return isbn.replace(/[^0-9X]/gi, '').toUpperCase();
 }
@@ -53,6 +67,27 @@ function isSameIsbn(left?: string, right?: string) {
 function normalizeImageUrl(url?: string) {
   if (!url) return undefined;
   return url.replace(/^http:\/\//i, 'https://');
+}
+
+function buildGoogleVolumeCoverUrl(volumeId?: string) {
+  if (!volumeId) return undefined;
+  return `https://books.google.com/books/content?id=${encodeURIComponent(volumeId)}&printsec=frontcover&img=1&zoom=1&source=gbs_api`;
+}
+
+function buildGoogleIsbnCoverUrl(isbn?: string) {
+  if (!isbn) return undefined;
+  return `https://books.google.com/books/content?vid=ISBN${encodeURIComponent(normalizeIsbn(isbn))}&printsec=frontcover&img=1&zoom=1&source=gbs_api`;
+}
+
+function firstCoverUrl(...urls: Array<string | undefined>) {
+  return urls.map(normalizeImageUrl).find((url): url is string => !!url);
+}
+
+function normalizeComparableText(value?: string) {
+  return value
+    ?.toLowerCase()
+    .replace(/[ \t\r\n　]/g, '')
+    .replace(/[!！?？:：;；,，.．。'"“”‘’「」『』（）()[\]【】〈〉<>]/g, '');
 }
 
 function hasMatchingIndustryIdentifier(
@@ -78,8 +113,25 @@ function mergeBookMetadataList(primary: BookInput, fallbacks: Array<BookInput | 
   return fallbacks.reduce<BookInput>((current, fallback) => mergeBookMetadata(current, fallback), primary);
 }
 
-function keepThumbnailOnlyForIsbnMatch(book: BookInput | null, isbn: string): BookInput | null {
+function isSameSeriesTitle(left?: string, right?: string) {
+  const normalizedLeft = normalizeComparableText(left);
+  const normalizedRight = normalizeComparableText(right);
+  if (!normalizedLeft || !normalizedRight) return false;
+  return normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft);
+}
+
+function keepThumbnailOnlyForSafeMatch(
+  book: BookInput | null,
+  isbn: string,
+  expected?: Pick<BookInput, 'seriesTitle' | 'volumeNumber'>,
+): BookInput | null {
   if (!book || isSameIsbn(book.isbn, isbn)) return book;
+  const hasSameVolume =
+    !!expected?.volumeNumber &&
+    !!book.volumeNumber &&
+    expected.volumeNumber === book.volumeNumber;
+  const hasSameSeries = isSameSeriesTitle(book.seriesTitle, expected?.seriesTitle);
+  if (hasSameVolume && hasSameSeries) return book;
   return { ...book, thumbnailUrl: undefined };
 }
 
@@ -153,11 +205,56 @@ async function lookupOpenBd(isbn: string): Promise<BookInput | null> {
   };
 }
 
-async function lookupGoogleBooks(isbn: string): Promise<BookInput | null> {
-  return lookupGoogleBooksByQuery(`isbn:${isbn}`, isbn);
+async function lookupRakutenBooksByIsbn(isbn: string): Promise<BookInput | null> {
+  return lookupRakutenBooks({ isbn });
 }
 
-async function lookupGoogleBooksByQuery(query: string, isbn: string): Promise<BookInput | null> {
+async function lookupRakutenBooksByTitle(title: string): Promise<BookInput | null> {
+  return lookupRakutenBooks({ title });
+}
+
+async function lookupRakutenBooks(params: { isbn?: string; title?: string }): Promise<BookInput | null> {
+  if (!env.rakutenAppId) return null;
+
+  const searchParams = new URLSearchParams({
+    applicationId: env.rakutenAppId,
+    format: 'json',
+  });
+  if (params.isbn) searchParams.set('isbn', normalizeIsbn(params.isbn));
+  if (params.title) searchParams.set('title', params.title);
+
+  const response = await fetchWithTimeout(
+    `https://app.rakuten.co.jp/services/api/BooksBook/Search/20170404?${searchParams.toString()}`,
+  );
+
+  if (!response.ok) return null;
+
+  const payload = (await response.json()) as RakutenBooksResponse;
+  const item = payload.Items?.[0]?.Item;
+  if (!item?.title) return null;
+
+  const parsed = parseSeriesTitle(item.title);
+
+  return {
+    isbn: item.isbn ?? params.isbn,
+    title: item.title,
+    seriesTitle: parsed.seriesTitle,
+    volumeNumber: parsed.volumeNumber,
+    author: item.author,
+    thumbnailUrl: firstCoverUrl(item.largeImageUrl, item.mediumImageUrl, item.smallImageUrl),
+    status: 'unread',
+  };
+}
+
+async function lookupGoogleBooks(isbn: string): Promise<BookInput | null> {
+  return lookupGoogleBooksByQuery(`isbn:${isbn}`, isbn, { trustFirstResultThumbnail: true });
+}
+
+async function lookupGoogleBooksByQuery(
+  query: string,
+  isbn: string,
+  options: { expectedSeriesTitle?: string; expectedVolumeNumber?: number; trustFirstResultThumbnail?: boolean } = {},
+): Promise<BookInput | null> {
   const params = new URLSearchParams({ q: query });
   if (env.googleBooksApiKey) params.set('key', env.googleBooksApiKey);
 
@@ -183,15 +280,34 @@ async function lookupGoogleBooksByQuery(query: string, isbn: string): Promise<Bo
         hasMatchingIndustryIdentifier(item.volumeInfo?.industryIdentifiers, normalizedIsbn),
       )
     : undefined;
-  const volume = (matchingItem ?? payload.items?.[0])?.volumeInfo;
+  const matchingVolumeItem = payload.items?.find((item) => {
+    const title = item.volumeInfo?.title;
+    if (!title || !options.expectedVolumeNumber || !options.expectedSeriesTitle) return false;
+    const parsed = parseSeriesTitle(title);
+    return (
+      parsed.volumeNumber === options.expectedVolumeNumber &&
+      isSameSeriesTitle(parsed.seriesTitle, options.expectedSeriesTitle)
+    );
+  });
+  const selectedItem = matchingItem ?? matchingVolumeItem ?? payload.items?.[0];
+  const volume = selectedItem?.volumeInfo;
   if (!volume?.title) return null;
 
   const parsed = parseSeriesTitle(volume.title);
   const isbnMatched = normalizedIsbn
     ? hasMatchingIndustryIdentifier(volume.industryIdentifiers, normalizedIsbn)
     : false;
+  const canUseThumbnail = !normalizedIsbn || isbnMatched || !!options.trustFirstResultThumbnail;
   const isbnFromApi =
     volume.industryIdentifiers?.find((item) => item.type === 'ISBN_13')?.identifier ?? isbn;
+  const fallbackCoverUrl = canUseThumbnail
+    ? firstCoverUrl(
+        volume.imageLinks?.thumbnail,
+        volume.imageLinks?.smallThumbnail,
+        buildGoogleVolumeCoverUrl(selectedItem?.id),
+        buildGoogleIsbnCoverUrl(isbnFromApi),
+      )
+    : undefined;
 
   return {
     isbn: isbnFromApi,
@@ -199,10 +315,7 @@ async function lookupGoogleBooksByQuery(query: string, isbn: string): Promise<Bo
     seriesTitle: parsed.seriesTitle,
     volumeNumber: parsed.volumeNumber,
     author: volume.authors?.join(', '),
-    thumbnailUrl:
-      !normalizedIsbn || isbnMatched
-        ? normalizeImageUrl(volume.imageLinks?.thumbnail ?? volume.imageLinks?.smallThumbnail)
-        : undefined,
+    thumbnailUrl: fallbackCoverUrl,
     status: 'unread',
   };
 }
@@ -213,7 +326,19 @@ export async function lookupBookByTitle(title: string, fallbackIsbn?: string): P
   let firstResult: BookInput | null = null;
 
   for (const query of buildTitleQueries(trimmedTitle)) {
-    const titleResult = await lookupGoogleBooksByQuery(`intitle:${query}`, fallbackIsbn ?? '');
+    const parsed = parseSeriesTitle(trimmedTitle);
+    const rakutenResult = keepThumbnailOnlyForSafeMatch(
+      await lookupRakutenBooksByTitle(query),
+      fallbackIsbn ?? '',
+      parsed,
+    );
+    if (rakutenResult?.thumbnailUrl) return rakutenResult;
+    if (rakutenResult && !firstResult) firstResult = rakutenResult;
+
+    const titleResult = await lookupGoogleBooksByQuery(`intitle:${query}`, fallbackIsbn ?? '', {
+      expectedSeriesTitle: parsed.seriesTitle,
+      expectedVolumeNumber: parsed.volumeNumber,
+    });
     if (titleResult?.thumbnailUrl) return titleResult;
     if (titleResult && !firstResult) firstResult = titleResult;
   }
@@ -226,22 +351,37 @@ export async function lookupBookByIsbn(isbn: string): Promise<BookInput | null> 
   if (!isBookIsbnBarcode(normalizedIsbn)) return null;
 
   const openBdResult = await tryLookup('OpenBD', () => lookupOpenBd(normalizedIsbn));
+  const rakutenResult = await tryLookup('Rakuten Books', () => lookupRakutenBooksByIsbn(normalizedIsbn));
   const strictGoogleResult = await lookupGoogleBooks(normalizedIsbn);
+  if (rakutenResult?.thumbnailUrl && rakutenResult.volumeNumber) return rakutenResult;
+
   if (openBdResult) {
     if (openBdResult.thumbnailUrl && openBdResult.volumeNumber) return openBdResult;
 
-    const titleFallback = keepThumbnailOnlyForIsbnMatch(
+    const titleFallback = keepThumbnailOnlyForSafeMatch(
       await lookupBookByTitle(openBdResult.title, normalizedIsbn),
       normalizedIsbn,
+      openBdResult,
     );
-    return mergeBookMetadataList(openBdResult, [strictGoogleResult, titleFallback]);
+    return mergeBookMetadataList(openBdResult, [rakutenResult, strictGoogleResult, titleFallback]);
+  }
+
+  if (rakutenResult?.thumbnailUrl) return rakutenResult;
+  if (rakutenResult) {
+    const titleFallback = keepThumbnailOnlyForSafeMatch(
+      await lookupBookByTitle(rakutenResult.title, normalizedIsbn),
+      normalizedIsbn,
+      rakutenResult,
+    );
+    return mergeBookMetadata(rakutenResult, titleFallback);
   }
 
   if (strictGoogleResult?.thumbnailUrl) return strictGoogleResult;
   if (strictGoogleResult) {
-    const titleFallback = keepThumbnailOnlyForIsbnMatch(
+    const titleFallback = keepThumbnailOnlyForSafeMatch(
       await lookupBookByTitle(strictGoogleResult.title, normalizedIsbn),
       normalizedIsbn,
+      strictGoogleResult,
     );
     return mergeBookMetadata(strictGoogleResult, titleFallback);
   }

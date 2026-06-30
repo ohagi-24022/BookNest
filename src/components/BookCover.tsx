@@ -24,6 +24,12 @@ function buildGoogleCoverUrl(isbn?: string) {
   return `https://books.google.com/books/content?vid=ISBN${normalized}&printsec=frontcover&img=1&zoom=1&source=gbs_api`;
 }
 
+function buildGoogleLargeCoverUrl(isbn?: string) {
+  const normalized = normalizeIsbn(isbn);
+  if (!normalized) return undefined;
+  return `https://books.google.com/books/content?vid=ISBN${normalized}&printsec=frontcover&img=1&zoom=0&source=gbs_api`;
+}
+
 function buildOpenLibraryCoverUrl(isbn?: string) {
   const normalized = normalizeIsbn(isbn);
   if (!normalized) return undefined;
@@ -42,6 +48,7 @@ export function BookCover({
       [
         normalizeImageUrl(thumbnailUrl),
         buildGoogleCoverUrl(isbn),
+        buildGoogleLargeCoverUrl(isbn),
         buildOpenLibraryCoverUrl(isbn),
       ].filter((url): url is string => !!url),
     [isbn, thumbnailUrl],

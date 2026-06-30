@@ -4,6 +4,7 @@ type ExtraConfig = {
   supabaseUrl?: string;
   supabaseAnonKey?: string;
   googleBooksApiKey?: string;
+  rakutenAppId?: string;
 };
 
 const extra = (Constants.expoConfig?.extra ?? {}) as ExtraConfig;
@@ -26,10 +27,13 @@ export const env = {
     clean(process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY) ?? clean(extra.supabaseAnonKey),
   googleBooksApiKey:
     clean(process.env.EXPO_PUBLIC_GOOGLE_BOOKS_API_KEY) ?? clean(extra.googleBooksApiKey),
+  rakutenAppId:
+    clean(process.env.EXPO_PUBLIC_RAKUTEN_APP_ID) ?? clean(extra.rakutenAppId),
 };
 
 export const envStatus = {
   hasSupabaseUrl: !!env.supabaseUrl,
   hasSupabaseAnonKey: !!env.supabaseAnonKey,
   hasGoogleBooksApiKey: !!env.googleBooksApiKey,
+  hasRakutenAppId: !!env.rakutenAppId,
 };

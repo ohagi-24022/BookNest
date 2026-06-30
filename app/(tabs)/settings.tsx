@@ -155,6 +155,9 @@ export default function SettingsScreen() {
         <Text style={[styles.rowCopy, { color: colors.muted }]}>
           Google Books API Key: {envStatus.hasGoogleBooksApiKey ? '設定済み' : '未設定'}
         </Text>
+        <Text style={[styles.rowCopy, { color: colors.muted }]}>
+          Rakuten App ID: {envStatus.hasRakutenAppId ? '設定済み' : '未設定'}
+        </Text>
       </View>
 
       <View style={[styles.section, { borderBottomColor: colors.border }]}>

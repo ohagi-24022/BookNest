@@ -17,5 +17,6 @@ module.exports = ({ config }) => ({
     supabaseUrl: cleanSupabaseUrl(process.env.EXPO_PUBLIC_SUPABASE_URL),
     supabaseAnonKey: clean(process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY),
     googleBooksApiKey: clean(process.env.EXPO_PUBLIC_GOOGLE_BOOKS_API_KEY),
+    rakutenAppId: clean(process.env.EXPO_PUBLIC_RAKUTEN_APP_ID),
   },
 });

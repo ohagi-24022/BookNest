@@ -38,6 +38,7 @@ export default function ScanScreen() {
   const { colors } = useAppTheme();
   const [isScanning, setIsScanning] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [scanMode, setScanMode] = useState<'confirm' | 'continuous'>('confirm');
   const [notice, setNotice] = useState<ScanNotice>({
     tone: 'neutral',
     message: 'ISBNバーコードを枠内に入れてください。',
@@ -135,8 +136,23 @@ export default function ScanScreen() {
         const bookInput = await lookupBookByIsbn(normalized);
         if (bookInput) {
           applyLookupResult({ ...bookInput, isbn: bookInput.isbn ?? normalized });
-          setIsScanning(false);
-          setNotice({ tone: 'success', message: `${bookInput.title} を確認してから追加してください。` });
+          if (scanMode === 'continuous') {
+            try {
+              const book = await addBook({ ...bookInput, isbn: bookInput.isbn ?? normalized });
+              setNotice({ tone: 'success', message: `${book.title} を追加しました。次の本を読み取れます。` });
+            } catch (error) {
+              setNotice({
+                tone: 'warning',
+                message:
+                  error instanceof Error
+                    ? `書籍は見つかりましたが登録できませんでした: ${error.message}`
+                    : '書籍は見つかりましたが登録できませんでした。ログイン状態を確認してください。',
+              });
+            }
+          } else {
+            setIsScanning(false);
+            setNotice({ tone: 'success', message: `${bookInput.title} を確認してから追加してください。` });
+          }
           return;
         }
 
@@ -161,7 +177,7 @@ export default function ScanScreen() {
         }, 1200);
       }
     },
-    [addBook, isScanning],
+    [addBook, isScanning, scanMode],
   );
 
   const submitManual = async () => {
@@ -242,6 +258,22 @@ export default function ScanScreen() {
         </View>
 
         <View style={styles.scanControls}>
+          <View style={[styles.modeSwitch, { backgroundColor: colors.elevated }]}>
+            {[
+              ['confirm', '確認'],
+              ['continuous', '連続登録'],
+            ].map(([value, label]) => (
+              <Pressable
+                key={value}
+                onPress={() => setScanMode(value as 'confirm' | 'continuous')}
+                style={[styles.modeButton, scanMode === value && { backgroundColor: colors.text }]}
+              >
+                <Text style={[styles.modeText, { color: scanMode === value ? colors.background : colors.muted }]}>
+                  {label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
           <Pressable
             disabled={isSubmitting}
             onPress={() => setIsScanning((value) => !value)}
@@ -351,7 +383,14 @@ const styles = StyleSheet.create({
   permissionText: { color: '#ffffff', fontSize: 15, marginBottom: 16, textAlign: 'center' },
   notice: { borderRadius: 8, marginTop: 12, minHeight: 44, padding: 12 },
   noticeText: { fontSize: 13, fontWeight: '700', lineHeight: 18 },
-  scanControls: { paddingVertical: 14 },
+  scanControls: { gap: 10, paddingVertical: 14 },
+  modeSwitch: {
+    borderRadius: 8,
+    flexDirection: 'row',
+    padding: 4,
+  },
+  modeButton: { alignItems: 'center', borderRadius: 6, flex: 1, height: 38, justifyContent: 'center' },
+  modeText: { fontSize: 13, fontWeight: '800' },
   primaryButton: {
     alignItems: 'center',
     borderRadius: 8,

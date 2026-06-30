@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   FlatList,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -64,9 +65,9 @@ export default function HomeScreen() {
       seriesGroups.filter((group) => {
         const matchesFilter =
           filter === 'all' ||
-          (filter === 'unread' && group.unreadCount > 0) ||
-          (filter === 'read' && group.readCount === group.ownedCount) ||
-          (filter === 'reading' && group.representative.status === 'reading') ||
+          filter === 'unread' ||
+          filter === 'read' ||
+          filter === 'reading' ||
           (filter === 'missing' && (seriesStats.get(group.title)?.missingVolumes.length ?? 0) > 0);
         const matchesQuery = group.title.toLowerCase().includes(query.toLowerCase());
         return matchesFilter && matchesQuery;
@@ -90,7 +91,6 @@ export default function HomeScreen() {
       }),
     [books, filter, query, seriesStats],
   );
-
   const renderCover = (book: Book) => (
     <BookCover thumbnailUrl={book.thumbnailUrl} isbn={book.isbn} style={styles.cover} />
   );
@@ -164,38 +164,47 @@ export default function HomeScreen() {
         ))}
       </View>
 
-      <View style={styles.filterRow}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.filterScroller}
+        contentContainerStyle={styles.filterRow}
+      >
         {filters.map((item) => (
-          <Pressable
-            key={item.value}
-            onPress={() => setFilter(item.value)}
-            style={[
-              styles.filterButton,
-              { borderColor: colors.border },
-              filter === item.value && { backgroundColor: colors.text, borderColor: colors.text },
-            ]}
-          >
-            <Text style={[styles.filterText, { color: filter === item.value ? colors.background : colors.muted }]}>
-              {item.label}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+            <Pressable
+              key={item.value}
+              onPress={() => setFilter(item.value)}
+              style={[
+                styles.filterButton,
+                { borderColor: colors.border },
+                filter === item.value && { backgroundColor: colors.text, borderColor: colors.text },
+              ]}
+            >
+              <Text style={[styles.filterText, { color: filter === item.value ? colors.background : colors.muted }]}>
+                {item.label}
+              </Text>
+            </Pressable>
+          ))}
+      </ScrollView>
+
+      <Text style={[styles.visibleCount, { color: colors.muted }]}>
+        {viewMode === 'series'
+          ? `${visibleGroups.length} / ${seriesGroups.length} シリーズ表示`
+          : `${visibleBooks.length} / ${books.length} 冊表示`}
+      </Text>
 
       {viewMode === 'series' ? (
-        <FlatList
-          key="series-grid"
-          data={visibleGroups}
-          extraData={listVersion}
-          keyExtractor={(item) => item.id}
-          numColumns={2}
-          columnWrapperStyle={styles.gridRow}
+        <ScrollView
+          key={`series-grid-${listVersion}`}
+          style={styles.list}
           contentContainerStyle={styles.grid}
-          renderItem={({ item }) => (
-            <Link href={`/series/${encodeURIComponent(item.title)}`} asChild>
-              <Pressable style={[styles.seriesCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          showsVerticalScrollIndicator={false}
+        >
+          {visibleGroups.map((item) => (
+            <Link key={item.id} href={`/series/${encodeURIComponent(item.title)}`} asChild>
+              <Pressable style={[styles.seriesRow, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                 {renderCover(item.representative)}
-                <View style={styles.cardBody}>
+                <View style={styles.seriesRowBody}>
                   <Text numberOfLines={2} style={[styles.seriesTitle, { color: colors.text }]}>
                     {item.title}
                   </Text>
@@ -229,9 +238,8 @@ export default function HomeScreen() {
                 </View>
               </Pressable>
             </Link>
-          )}
-          ListEmptyComponent={
-          !loading ? (
+          ))}
+          {visibleGroups.length === 0 && !loading ? (
             <View style={styles.empty}>
               <Text style={[styles.emptyTitle, { color: colors.text }]}>
                 {requiresAuth ? 'ログイン待ちです' : 'まだ本がありません'}
@@ -242,12 +250,12 @@ export default function HomeScreen() {
                   : '中央タブからISBNをスキャンするか、手動登録してください。'}
               </Text>
             </View>
-          ) : null
-        }
-        />
+          ) : null}
+        </ScrollView>
       ) : (
         <FlatList
           key="books-list"
+          style={styles.list}
           data={visibleBooks}
           extraData={listVersion}
           keyExtractor={(item) => item.id}
@@ -269,12 +277,12 @@ export default function HomeScreen() {
             </Link>
           )}
           ListEmptyComponent={
-            !loading ? (
-              <View style={styles.empty}>
-                <Text style={[styles.emptyTitle, { color: colors.text }]}>表示できる本がありません</Text>
-              </View>
-            ) : null
-          }
+          !loading ? (
+            <View style={styles.empty}>
+              <Text style={[styles.emptyTitle, { color: colors.text }]}>表示できる本がありません</Text>
+            </View>
+          ) : null
+        }
         />
       )}
     </View>
@@ -319,6 +327,7 @@ const styles = StyleSheet.create({
   summaryItem: { alignItems: 'center', flex: 1 },
   summaryValue: { fontSize: 20, fontWeight: '900' },
   summaryLabel: { fontSize: 12, fontWeight: '700', marginTop: 2 },
+  filterScroller: { flexGrow: 0 },
   filterRow: { flexDirection: 'row', gap: 8, paddingVertical: 14 },
   filterButton: {
     borderRadius: 8,
@@ -328,8 +337,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   filterText: { fontSize: 13, fontWeight: '700' },
+  visibleCount: { fontSize: 12, fontWeight: '700', marginBottom: 8 },
+  list: { flex: 1 },
   grid: { paddingBottom: 110 },
-  gridRow: { gap: 14 },
   bookList: { paddingBottom: 110 },
   seriesCard: {
     borderRadius: 8,
@@ -338,7 +348,17 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     overflow: 'hidden',
   },
-  cover: { aspectRatio: 0.68, backgroundColor: '#e5e5e5', width: '100%' },
+  seriesRow: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 10,
+    padding: 10,
+  },
+  seriesRowBody: { flex: 1 },
+  cover: { backgroundColor: '#e5e5e5', borderRadius: 4, height: 120, width: 82 },
   coverFallback: { alignItems: 'center', justifyContent: 'center' },
   coverFallbackText: { color: '#777777', fontSize: 12, fontWeight: '800' },
   rowCover: { backgroundColor: '#e5e5e5', borderRadius: 4, height: 96, width: 66 },
