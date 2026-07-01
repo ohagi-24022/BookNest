@@ -38,6 +38,7 @@ export default function SeriesScreen() {
   const { colors } = useAppTheme();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [draftSeries, setDraftSeries] = useState('');
   const [draftVolume, setDraftVolume] = useState('');
 
@@ -110,10 +111,46 @@ export default function SeriesScreen() {
   };
 
   const refreshMetadata = async (book: Book) => {
+    if (refreshingId) return;
+    setRefreshingId(book.id);
     try {
-      await repairBookMetadata(book.id);
+      const result = await repairBookMetadata(book.id);
+      const beforeCover = result.beforeThumbnailUrl ? 'あり' : 'なし';
+      const afterCover = result.afterThumbnailUrl ? 'あり' : 'なし';
+      Alert.alert(
+        '再取得デバッグ',
+        [
+          `対象: ${book.title}`,
+          `検索語: ${result.lookupTitle}`,
+          `取得タイトル: ${result.title}`,
+          `シリーズ: ${result.seriesTitle ?? 'なし'}`,
+          `巻数: ${result.volumeNumber ?? 'なし'}`,
+          `表紙: ${beforeCover} → ${afterCover}`,
+          result.afterThumbnailUrl ? `表紙URL: ${result.afterThumbnailUrl}` : '表紙URL: なし',
+          ...(result.debugEntries?.length
+            ? [
+                '',
+                'API候補:',
+                ...result.debugEntries.map((entry, index) =>
+                  [
+                    `${index + 1}. ${entry.provider} / ${entry.status}`,
+                    `検索: ${entry.query}`,
+                    entry.title ? `題名: ${entry.title}` : undefined,
+                    entry.volumeNumber ? `巻数: ${entry.volumeNumber}` : undefined,
+                    entry.coverUrl ? '表紙URL: あり' : '表紙URL: なし',
+                    entry.reason ? `理由: ${entry.reason}` : undefined,
+                  ]
+                    .filter(Boolean)
+                    .join(' / '),
+                ),
+              ]
+            : []),
+        ].join('\n'),
+      );
     } catch (error) {
       Alert.alert('BookNest', error instanceof Error ? error.message : '再取得に失敗しました。');
+    } finally {
+      setRefreshingId(null);
     }
   };
 
@@ -203,10 +240,17 @@ export default function SeriesScreen() {
                 {isOwnedBook(item) && (
                   <View style={styles.actionRow}>
                     <Pressable
+                      disabled={refreshingId === item.id}
                       onPress={() => refreshMetadata(item)}
-                      style={[styles.smallButton, { borderColor: colors.border }]}
+                      style={[
+                        styles.smallButton,
+                        { borderColor: colors.border },
+                        refreshingId === item.id && styles.disabledButton,
+                      ]}
                     >
-                      <Text style={[styles.smallButtonText, { color: colors.text }]}>再取得</Text>
+                      <Text style={[styles.smallButtonText, { color: colors.text }]}>
+                        {refreshingId === item.id ? '再取得中' : '再取得'}
+                      </Text>
                     </Pressable>
                     <Pressable
                       onPress={() => confirmDelete(item)}

@@ -18,22 +18,35 @@ function normalizeIsbn(isbn?: string) {
   return isbn?.replace(/[^0-9X]/gi, '').toUpperCase();
 }
 
-function buildGoogleCoverUrl(isbn?: string) {
-  const normalized = normalizeIsbn(isbn);
-  if (!normalized) return undefined;
-  return `https://books.google.com/books/content?vid=ISBN${normalized}&printsec=frontcover&img=1&zoom=1&source=gbs_api`;
+function isGeneratedGoogleIsbnCoverUrl(url?: string) {
+  return !!url && /books\.google\.[^/]+\/books\/content/i.test(url) && /[?&]vid=ISBN/i.test(url);
 }
 
-function buildGoogleLargeCoverUrl(isbn?: string) {
-  const normalized = normalizeIsbn(isbn);
-  if (!normalized) return undefined;
-  return `https://books.google.com/books/content?vid=ISBN${normalized}&printsec=frontcover&img=1&zoom=0&source=gbs_api`;
+function isKnownUnavailableCoverUrl(url?: string) {
+  return !!url && /imagenotavailable|no[_-]?image|noimage/i.test(url);
 }
 
 function buildOpenLibraryCoverUrl(isbn?: string) {
   const normalized = normalizeIsbn(isbn);
   if (!normalized) return undefined;
   return `https://covers.openlibrary.org/b/isbn/${normalized}-L.jpg?default=false`;
+}
+
+function buildRakutenCoverUrl(isbn?: string) {
+  const normalized = normalizeIsbn(isbn);
+  if (!normalized || !/^[0-9]{13}$/.test(normalized)) return undefined;
+  const folder = normalized.slice(-4);
+  return `https://thumbnail.image.rakuten.co.jp/@0_mall/book/cabinet/${folder}/${normalized}.jpg?_ex=300x300`;
+}
+
+function buildAmazonCoverUrl(isbn?: string) {
+  const normalized = normalizeIsbn(isbn);
+  if (!normalized || !/^[0-9]{10,13}$/.test(normalized)) return undefined;
+  return `https://images-na.ssl-images-amazon.com/images/P/${normalized}.09.LZZZZZZZ.jpg`;
+}
+
+function uniqueUrls(urls: Array<string | undefined>) {
+  return [...new Set(urls.filter((url): url is string => !!url))];
 }
 
 export function BookCover({
@@ -45,19 +58,22 @@ export function BookCover({
 }: BookCoverProps) {
   const candidates = useMemo(
     () =>
-      [
-        normalizeImageUrl(thumbnailUrl),
-        buildGoogleCoverUrl(isbn),
-        buildGoogleLargeCoverUrl(isbn),
+      uniqueUrls([
+        isGeneratedGoogleIsbnCoverUrl(thumbnailUrl) || isKnownUnavailableCoverUrl(thumbnailUrl)
+          ? undefined
+          : normalizeImageUrl(thumbnailUrl),
+        buildRakutenCoverUrl(isbn),
+        buildAmazonCoverUrl(isbn),
         buildOpenLibraryCoverUrl(isbn),
-      ].filter((url): url is string => !!url),
+      ]),
     [isbn, thumbnailUrl],
   );
+  const candidateKey = candidates.join('|');
   const [candidateIndex, setCandidateIndex] = useState(0);
 
   useEffect(() => {
     setCandidateIndex(0);
-  }, [candidates]);
+  }, [candidateKey]);
 
   const imageUri = candidates[candidateIndex];
   const coverStyle = [styles.cover, style, missing && styles.missingCover];
@@ -65,10 +81,11 @@ export function BookCover({
   if (imageUri) {
     return (
       <Image
+        key={imageUri}
         source={{ uri: imageUri }}
         style={coverStyle}
         resizeMode="cover"
-        onError={() => setCandidateIndex((current) => current + 1)}
+        onError={() => setCandidateIndex((current) => Math.min(current + 1, candidates.length))}
       />
     );
   }

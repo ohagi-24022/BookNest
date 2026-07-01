@@ -3,6 +3,7 @@ const VOLUME_PATTERNS = [
   /(?:第)?([0-9]{1,3})\s*(?:巻|巻目|volume|vol\.?|#)/i,
   /([0-9０-９]{1,3})\s*(?=[（(【「『〈<])/,
   /(?:\(|（|〈|<)\s*([0-9０-９]{1,3})\s*(?:\)|）|〉|>)/,
+  /(?:^|[\s　])([0-9０-９]{1,3})\s+(?=\S)/,
   /(?:^|[\s　])([0-9０-９]{1,3})$/,
 ];
 
@@ -22,7 +23,9 @@ export function parseSeriesTitle(title: string) {
     if (!match?.[1]) continue;
 
     volumeNumber = Number.parseInt(toHalfWidthNumber(match[1]), 10);
-    seriesTitle = normalized.replace(match[0], '').trim();
+    const beforeVolume = normalized.slice(0, match.index).trim();
+    const afterVolume = normalized.slice((match.index ?? 0) + match[0].length).trim();
+    seriesTitle = beforeVolume && afterVolume ? beforeVolume : normalized.replace(match[0], '').trim();
     break;
   }
 

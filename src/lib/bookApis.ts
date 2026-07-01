@@ -55,6 +55,26 @@ type RakutenBooksResponse = {
   }>;
 };
 
+type RakutenBooksTotalResponse = RakutenBooksResponse;
+
+type RakutenItem = NonNullable<NonNullable<RakutenBooksResponse['Items']>[number]['Item']>;
+
+type ExpectedBook = Partial<Pick<BookInput, 'seriesTitle' | 'volumeNumber'>> & {
+  isbn?: string;
+};
+
+export type BookLookupDebugEntry = {
+  provider: string;
+  query: string;
+  status: 'hit' | 'miss' | 'error';
+  title?: string;
+  isbn?: string;
+  seriesTitle?: string;
+  volumeNumber?: number;
+  coverUrl?: string;
+  reason?: string;
+};
+
 function normalizeIsbn(isbn: string) {
   return isbn.replace(/[^0-9X]/gi, '').toUpperCase();
 }
@@ -69,18 +89,29 @@ function normalizeImageUrl(url?: string) {
   return url.replace(/^http:\/\//i, 'https://');
 }
 
-function buildGoogleVolumeCoverUrl(volumeId?: string) {
-  if (!volumeId) return undefined;
-  return `https://books.google.com/books/content?id=${encodeURIComponent(volumeId)}&printsec=frontcover&img=1&zoom=1&source=gbs_api`;
-}
-
-function buildGoogleIsbnCoverUrl(isbn?: string) {
-  if (!isbn) return undefined;
-  return `https://books.google.com/books/content?vid=ISBN${encodeURIComponent(normalizeIsbn(isbn))}&printsec=frontcover&img=1&zoom=1&source=gbs_api`;
+function isKnownUnavailableCoverUrl(url?: string) {
+  return !!url && /imagenotavailable|no[_-]?image|noimage/i.test(url);
 }
 
 function firstCoverUrl(...urls: Array<string | undefined>) {
-  return urls.map(normalizeImageUrl).find((url): url is string => !!url);
+  return urls
+    .map(normalizeImageUrl)
+    .find((url): url is string => !!url && !isKnownUnavailableCoverUrl(url));
+}
+
+function buildRakutenIsbnCoverUrl(isbn?: string) {
+  const normalized = isbn ? normalizeIsbn(isbn) : '';
+  if (!/^[0-9]{13}$/.test(normalized)) return undefined;
+  const folder = normalized.slice(-4);
+  return `https://thumbnail.image.rakuten.co.jp/@0_mall/book/cabinet/${folder}/${normalized}.jpg?_ex=300x300`;
+}
+
+function withIsbnCoverFallback(book: BookInput | null, isbn?: string): BookInput | null {
+  if (!book || book.thumbnailUrl) return book;
+  return {
+    ...book,
+    thumbnailUrl: buildRakutenIsbnCoverUrl(book.isbn ?? isbn),
+  };
 }
 
 function normalizeComparableText(value?: string) {
@@ -135,13 +166,111 @@ function keepThumbnailOnlyForSafeMatch(
   return { ...book, thumbnailUrl: undefined };
 }
 
+function hasExpectedVolumeAndSeries(book: Pick<BookInput, 'seriesTitle' | 'volumeNumber'>, expected?: ExpectedBook) {
+  if (!expected?.volumeNumber || !expected.seriesTitle) return false;
+  return book.volumeNumber === expected.volumeNumber && isSameSeriesTitle(book.seriesTitle, expected.seriesTitle);
+}
+
+function rakutenItemHasCover(item?: RakutenItem) {
+  return !!firstCoverUrl(item?.largeImageUrl, item?.mediumImageUrl, item?.smallImageUrl);
+}
+
+function rakutenItemMatchesExpected(item: RakutenItem, expected?: ExpectedBook) {
+  const parsed = parseSeriesTitle(item.title ?? '');
+  if (expected?.isbn && isSameIsbn(item.isbn, expected.isbn)) return true;
+  return hasExpectedVolumeAndSeries(parsed, expected);
+}
+
+function selectRakutenItem(items: RakutenBooksResponse['Items'], expected?: ExpectedBook) {
+  const candidates = items?.map((entry) => entry.Item).filter((item): item is RakutenItem => !!item?.title) ?? [];
+  if (candidates.length === 0) return undefined;
+
+  return (
+    candidates.find((item) => rakutenItemHasCover(item) && expected?.isbn && isSameIsbn(item.isbn, expected.isbn)) ??
+    candidates.find((item) => rakutenItemHasCover(item) && rakutenItemMatchesExpected(item, expected)) ??
+    candidates.find((item) => expected?.isbn && isSameIsbn(item.isbn, expected.isbn)) ??
+    candidates.find((item) => rakutenItemMatchesExpected(item, expected)) ??
+    candidates.find(rakutenItemHasCover) ??
+    candidates[0]
+  );
+}
+
+function rakutenItemToBookInput(item: RakutenItem, fallbackIsbn?: string): BookInput {
+  const parsed = parseSeriesTitle(item.title ?? '');
+
+  return {
+    isbn: item.isbn ?? fallbackIsbn,
+    title: item.title ?? '',
+    seriesTitle: parsed.seriesTitle,
+    volumeNumber: parsed.volumeNumber,
+    author: item.author,
+    thumbnailUrl: firstCoverUrl(item.largeImageUrl, item.mediumImageUrl, item.smallImageUrl),
+    status: 'unread',
+  };
+}
+
+function rakutenItemToDebugEntry(provider: string, query: string, item: RakutenItem): BookLookupDebugEntry {
+  const parsed = parseSeriesTitle(item.title ?? '');
+
+  return {
+    provider,
+    query,
+    status: 'hit',
+    title: item.title,
+    isbn: item.isbn,
+    seriesTitle: parsed.seriesTitle,
+    volumeNumber: parsed.volumeNumber,
+    coverUrl: firstCoverUrl(item.largeImageUrl, item.mediumImageUrl, item.smallImageUrl),
+  };
+}
+
+function bookToDebugEntry(provider: string, query: string, book: BookInput | null): BookLookupDebugEntry {
+  if (!book) {
+    return {
+      provider,
+      query,
+      status: 'miss',
+      reason: '候補なし',
+    };
+  }
+
+  return {
+    provider,
+    query,
+    status: 'hit',
+    title: book.title,
+    isbn: book.isbn,
+    seriesTitle: book.seriesTitle,
+    volumeNumber: book.volumeNumber,
+    coverUrl: book.thumbnailUrl,
+  };
+}
+
 function buildTitleQueries(title: string) {
   const parsed = parseSeriesTitle(title);
   const seriesVolumeQuery = parsed.volumeNumber
     ? `${parsed.seriesTitle} ${parsed.volumeNumber}`
     : parsed.seriesTitle;
+  const seriesVolumeWithSuffixQuery = parsed.volumeNumber
+    ? `${parsed.seriesTitle} ${parsed.volumeNumber}巻`
+    : undefined;
+  const seriesVolumeWithPrefixQuery = parsed.volumeNumber
+    ? `${parsed.seriesTitle} 第${parsed.volumeNumber}巻`
+    : undefined;
 
-  return [...new Set([seriesVolumeQuery, title, parsed.seriesTitle].filter(Boolean))];
+  const queries = [
+    ...new Set(
+      [
+        seriesVolumeWithSuffixQuery,
+        seriesVolumeWithPrefixQuery,
+        seriesVolumeQuery,
+        title,
+        parsed.seriesTitle,
+      ].filter((query): query is string => !!query),
+    ),
+  ];
+
+  return queries;
 }
 
 export function isBookIsbnBarcode(value: string) {
@@ -206,14 +335,17 @@ async function lookupOpenBd(isbn: string): Promise<BookInput | null> {
 }
 
 async function lookupRakutenBooksByIsbn(isbn: string): Promise<BookInput | null> {
-  return lookupRakutenBooks({ isbn });
+  return lookupRakutenBooks({ isbn }, { isbn });
 }
 
-async function lookupRakutenBooksByTitle(title: string): Promise<BookInput | null> {
-  return lookupRakutenBooks({ title });
+async function lookupRakutenBooksByTitle(title: string, expected?: ExpectedBook): Promise<BookInput | null> {
+  return (await lookupRakutenBooks({ title }, expected)) ?? lookupRakutenBooksTotal(title, expected);
 }
 
-async function lookupRakutenBooks(params: { isbn?: string; title?: string }): Promise<BookInput | null> {
+async function lookupRakutenBooks(
+  params: { isbn?: string; title?: string },
+  expected?: ExpectedBook,
+): Promise<BookInput | null> {
   if (!env.rakutenAppId) return null;
 
   const searchParams = new URLSearchParams({
@@ -230,20 +362,32 @@ async function lookupRakutenBooks(params: { isbn?: string; title?: string }): Pr
   if (!response.ok) return null;
 
   const payload = (await response.json()) as RakutenBooksResponse;
-  const item = payload.Items?.[0]?.Item;
+  const item = selectRakutenItem(payload.Items, { ...expected, isbn: params.isbn ?? expected?.isbn });
   if (!item?.title) return null;
 
-  const parsed = parseSeriesTitle(item.title);
+  return rakutenItemToBookInput(item, params.isbn);
+}
 
-  return {
-    isbn: item.isbn ?? params.isbn,
-    title: item.title,
-    seriesTitle: parsed.seriesTitle,
-    volumeNumber: parsed.volumeNumber,
-    author: item.author,
-    thumbnailUrl: firstCoverUrl(item.largeImageUrl, item.mediumImageUrl, item.smallImageUrl),
-    status: 'unread',
-  };
+async function lookupRakutenBooksTotal(keyword: string, expected?: ExpectedBook): Promise<BookInput | null> {
+  if (!env.rakutenAppId || !keyword.trim()) return null;
+
+  const searchParams = new URLSearchParams({
+    applicationId: env.rakutenAppId,
+    format: 'json',
+    keyword,
+  });
+
+  const response = await fetchWithTimeout(
+    `https://app.rakuten.co.jp/services/api/BooksTotal/Search/20170404?${searchParams.toString()}`,
+  );
+
+  if (!response.ok) return null;
+
+  const payload = (await response.json()) as RakutenBooksTotalResponse;
+  const item = selectRakutenItem(payload.Items, expected);
+  if (!item?.title) return null;
+
+  return rakutenItemToBookInput(item);
 }
 
 async function lookupGoogleBooks(isbn: string): Promise<BookInput | null> {
@@ -304,8 +448,6 @@ async function lookupGoogleBooksByQuery(
     ? firstCoverUrl(
         volume.imageLinks?.thumbnail,
         volume.imageLinks?.smallThumbnail,
-        buildGoogleVolumeCoverUrl(selectedItem?.id),
-        buildGoogleIsbnCoverUrl(isbnFromApi),
       )
     : undefined;
 
@@ -324,26 +466,172 @@ export async function lookupBookByTitle(title: string, fallbackIsbn?: string): P
   const trimmedTitle = title.trim();
   if (!trimmedTitle) return null;
   let firstResult: BookInput | null = null;
+  const expected = parseSeriesTitle(trimmedTitle);
 
   for (const query of buildTitleQueries(trimmedTitle)) {
-    const parsed = parseSeriesTitle(trimmedTitle);
     const rakutenResult = keepThumbnailOnlyForSafeMatch(
-      await lookupRakutenBooksByTitle(query),
+      await lookupRakutenBooksByTitle(query, expected),
       fallbackIsbn ?? '',
-      parsed,
+      expected,
     );
     if (rakutenResult?.thumbnailUrl) return rakutenResult;
     if (rakutenResult && !firstResult) firstResult = rakutenResult;
 
-    const titleResult = await lookupGoogleBooksByQuery(`intitle:${query}`, fallbackIsbn ?? '', {
-      expectedSeriesTitle: parsed.seriesTitle,
-      expectedVolumeNumber: parsed.volumeNumber,
-    });
-    if (titleResult?.thumbnailUrl) return titleResult;
-    if (titleResult && !firstResult) firstResult = titleResult;
+    const titleResult = await tryLookup(
+      'Google Books',
+      () =>
+        lookupGoogleBooksByQuery(`intitle:${query}`, fallbackIsbn ?? '', {
+          expectedSeriesTitle: expected.seriesTitle,
+          expectedVolumeNumber: expected.volumeNumber,
+        }),
+      { silent: true },
+    );
+    const titleResultWithFallback = withIsbnCoverFallback(titleResult, fallbackIsbn);
+    if (titleResultWithFallback?.thumbnailUrl) return titleResultWithFallback;
+    if (titleResultWithFallback && !firstResult) firstResult = titleResultWithFallback;
   }
 
-  return firstResult ?? lookupGoogleBooksByQuery(trimmedTitle, fallbackIsbn ?? '');
+  return (
+    withIsbnCoverFallback(firstResult, fallbackIsbn) ??
+    withIsbnCoverFallback(
+      await tryLookup('Google Books', () => lookupGoogleBooksByQuery(trimmedTitle, fallbackIsbn ?? ''), { silent: true }),
+      fallbackIsbn,
+    )
+  );
+}
+
+export async function lookupBookDebugInfo(params: {
+  isbn?: string;
+  title: string;
+}): Promise<BookLookupDebugEntry[]> {
+  const entries: BookLookupDebugEntry[] = [];
+  const trimmedTitle = params.title.trim();
+  const normalizedIsbn = params.isbn ? normalizeIsbn(params.isbn) : '';
+  const expected = parseSeriesTitle(trimmedTitle);
+  const titleQueries = buildTitleQueries(trimmedTitle).slice(0, 3);
+
+  if (normalizedIsbn) {
+    entries.push(await debugLookup('OpenBD', normalizedIsbn, () => lookupOpenBd(normalizedIsbn)));
+    entries.push(await debugLookup('Rakuten ISBN', normalizedIsbn, () => lookupRakutenBooksByIsbn(normalizedIsbn)));
+    entries.push(await debugLookup('Google ISBN', normalizedIsbn, () => lookupGoogleBooks(normalizedIsbn)));
+  }
+
+  for (const query of titleQueries) {
+    entries.push(...(await debugRakutenTitleCandidates(query, expected)));
+    entries.push(
+      await debugLookup('Google Title', query, () =>
+        lookupGoogleBooksByQuery(`intitle:${query}`, normalizedIsbn, {
+          expectedSeriesTitle: expected.seriesTitle,
+          expectedVolumeNumber: expected.volumeNumber,
+        }),
+      ),
+    );
+  }
+
+  return entries.slice(0, 12);
+}
+
+async function debugLookup(
+  provider: string,
+  query: string,
+  lookup: () => Promise<BookInput | null>,
+): Promise<BookLookupDebugEntry> {
+  try {
+    return bookToDebugEntry(provider, query, await lookup());
+  } catch (error) {
+    return {
+      provider,
+      query,
+      status: 'error',
+      reason: error instanceof Error ? error.message : '不明なエラー',
+    };
+  }
+}
+
+async function debugRakutenTitleCandidates(
+  query: string,
+  expected: ExpectedBook,
+): Promise<BookLookupDebugEntry[]> {
+  if (!env.rakutenAppId) {
+    return [
+      {
+        provider: 'Rakuten Title',
+        query,
+        status: 'miss',
+        reason: '楽天APIキーなし',
+      },
+    ];
+  }
+
+  const booksCandidates = await debugRakutenEndpoint('Rakuten BooksBook', query, 'title', expected);
+  const totalCandidates = await debugRakutenEndpoint('Rakuten BooksTotal', query, 'keyword', expected);
+  return [...booksCandidates, ...totalCandidates].slice(0, 4);
+}
+
+async function debugRakutenEndpoint(
+  provider: string,
+  query: string,
+  queryParamName: 'title' | 'keyword',
+  expected: ExpectedBook,
+): Promise<BookLookupDebugEntry[]> {
+  try {
+    const searchParams = new URLSearchParams({
+      applicationId: env.rakutenAppId ?? '',
+      format: 'json',
+    });
+    searchParams.set(queryParamName, query);
+    const path =
+      queryParamName === 'title'
+        ? 'BooksBook/Search/20170404'
+        : 'BooksTotal/Search/20170404';
+    const response = await fetchWithTimeout(
+      `https://app.rakuten.co.jp/services/api/${path}?${searchParams.toString()}`,
+    );
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      return [
+        {
+          provider,
+          query,
+          status: 'error',
+          reason: [`HTTP ${response.status}`, errorBody.slice(0, 120)].filter(Boolean).join(': '),
+        },
+      ];
+    }
+
+    const payload = (await response.json()) as RakutenBooksResponse;
+    const candidates = payload.Items?.map((entry) => entry.Item).filter((item): item is RakutenItem => !!item?.title) ?? [];
+    const sortedCandidates = [...candidates].sort((left, right) => {
+      const leftScore =
+        (rakutenItemMatchesExpected(left, expected) ? 2 : 0) + (rakutenItemHasCover(left) ? 1 : 0);
+      const rightScore =
+        (rakutenItemMatchesExpected(right, expected) ? 2 : 0) + (rakutenItemHasCover(right) ? 1 : 0);
+      return rightScore - leftScore;
+    });
+
+    if (sortedCandidates.length === 0) {
+      return [
+        {
+          provider,
+          query,
+          status: 'miss',
+          reason: '候補なし',
+        },
+      ];
+    }
+
+    return sortedCandidates.slice(0, 2).map((item) => rakutenItemToDebugEntry(provider, query, item));
+  } catch (error) {
+    return [
+      {
+        provider,
+        query,
+        status: 'error',
+        reason: error instanceof Error ? error.message : '不明なエラー',
+      },
+    ];
+  }
 }
 
 export async function lookupBookByIsbn(isbn: string): Promise<BookInput | null> {
@@ -352,18 +640,24 @@ export async function lookupBookByIsbn(isbn: string): Promise<BookInput | null> 
 
   const openBdResult = await tryLookup('OpenBD', () => lookupOpenBd(normalizedIsbn));
   const rakutenResult = await tryLookup('Rakuten Books', () => lookupRakutenBooksByIsbn(normalizedIsbn));
-  const strictGoogleResult = await lookupGoogleBooks(normalizedIsbn);
+  const strictGoogleResult = await tryLookup('Google Books', () => lookupGoogleBooks(normalizedIsbn), {
+    silent: true,
+  });
   if (rakutenResult?.thumbnailUrl && rakutenResult.volumeNumber) return rakutenResult;
 
   if (openBdResult) {
-    if (openBdResult.thumbnailUrl && openBdResult.volumeNumber) return openBdResult;
+    const openBdWithFallback = withIsbnCoverFallback(openBdResult, normalizedIsbn);
+    if (openBdWithFallback?.thumbnailUrl && openBdWithFallback.volumeNumber) return openBdWithFallback;
 
     const titleFallback = keepThumbnailOnlyForSafeMatch(
       await lookupBookByTitle(openBdResult.title, normalizedIsbn),
       normalizedIsbn,
       openBdResult,
     );
-    return mergeBookMetadataList(openBdResult, [rakutenResult, strictGoogleResult, titleFallback]);
+    return withIsbnCoverFallback(
+      mergeBookMetadataList(openBdResult, [rakutenResult, strictGoogleResult, titleFallback]),
+      normalizedIsbn,
+    );
   }
 
   if (rakutenResult?.thumbnailUrl) return rakutenResult;
@@ -373,7 +667,7 @@ export async function lookupBookByIsbn(isbn: string): Promise<BookInput | null> 
       normalizedIsbn,
       rakutenResult,
     );
-    return mergeBookMetadata(rakutenResult, titleFallback);
+    return withIsbnCoverFallback(mergeBookMetadata(rakutenResult, titleFallback), normalizedIsbn);
   }
 
   if (strictGoogleResult?.thumbnailUrl) return strictGoogleResult;
@@ -383,17 +677,28 @@ export async function lookupBookByIsbn(isbn: string): Promise<BookInput | null> 
       normalizedIsbn,
       strictGoogleResult,
     );
-    return mergeBookMetadata(strictGoogleResult, titleFallback);
+    return withIsbnCoverFallback(mergeBookMetadata(strictGoogleResult, titleFallback), normalizedIsbn);
   }
 
-  return lookupGoogleBooksByQuery(normalizedIsbn, normalizedIsbn);
+  return withIsbnCoverFallback(
+    await tryLookup('Google Books', () => lookupGoogleBooksByQuery(normalizedIsbn, normalizedIsbn), {
+      silent: true,
+    }),
+    normalizedIsbn,
+  );
 }
 
-async function tryLookup(providerName: string, lookup: () => Promise<BookInput | null>) {
+async function tryLookup(
+  providerName: string,
+  lookup: () => Promise<BookInput | null>,
+  options: { silent?: boolean } = {},
+) {
   try {
     return await lookup();
   } catch (error) {
-    console.warn(`${providerName} lookup failed`, error);
+    if (!options.silent) {
+      console.warn(`${providerName} lookup failed`, error);
+    }
     return null;
   }
 }

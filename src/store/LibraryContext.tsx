@@ -10,7 +10,7 @@ import {
   useState,
 } from 'react';
 
-import { lookupBookByIsbn, lookupBookByTitle } from '../lib/bookApis';
+import { BookLookupDebugEntry, lookupBookByIsbn, lookupBookByTitle, lookupBookDebugInfo } from '../lib/bookApis';
 import { getMissingVolumes, parseSeriesTitle } from '../lib/series';
 import { supabase } from '../lib/supabase';
 import { Book, BookInput, MissingBook, ReadingStatus, ShelfItem } from '../types';
@@ -51,6 +51,17 @@ type SeriesGroup = {
   latestVolume?: number;
 };
 
+type MetadataRepairResult = {
+  title: string;
+  lookupTitle: string;
+  beforeThumbnailUrl?: string;
+  afterThumbnailUrl?: string;
+  seriesTitle?: string;
+  volumeNumber?: number;
+  author?: string;
+  debugEntries?: BookLookupDebugEntry[];
+};
+
 type LibraryContextValue = {
   books: Book[];
   loading: boolean;
@@ -61,7 +72,7 @@ type LibraryContextValue = {
   addBookByIsbn: (isbn: string) => Promise<Book | null>;
   updateBook: (bookId: string, updates: Partial<BookInput>) => Promise<void>;
   deleteBook: (bookId: string) => Promise<void>;
-  repairBookMetadata: (bookId: string) => Promise<void>;
+  repairBookMetadata: (bookId: string) => Promise<MetadataRepairResult>;
   bulkUpdateStatus: (bookIds: string[], status: ReadingStatus) => Promise<void>;
   getSeriesItems: (seriesTitle: string) => ShelfItem[];
 };
@@ -69,6 +80,15 @@ type LibraryContextValue = {
 const LibraryContext = createContext<LibraryContextValue | null>(null);
 
 const now = () => new Date().toISOString();
+
+async function safeLookupBookByIsbn(isbn: string) {
+  try {
+    return await lookupBookByIsbn(isbn);
+  } catch (error) {
+    console.warn('ISBN metadata lookup failed', error);
+    return null;
+  }
+}
 
 function fromBookRow(row: BookRow): Book {
   const parsedTitle = parseSeriesTitle(row.title);
@@ -163,6 +183,14 @@ function isUuid(value: string) {
 
 function normalizeIsbn(value?: string) {
   return value?.replace(/[^0-9X]/gi, '').toUpperCase();
+}
+
+function isKnownUnavailableCoverUrl(url?: string) {
+  return !!url && /imagenotavailable|no[_-]?image|noimage/i.test(url);
+}
+
+function buildMetadataLookupTitle(book: Pick<Book, 'title' | 'seriesTitle' | 'volumeNumber'>) {
+  return book.volumeNumber ? `${book.seriesTitle} ${book.volumeNumber}巻` : book.title;
 }
 
 function isDuplicateIsbn(currentBooks: Book[], bookInput: BookInput) {
@@ -293,7 +321,12 @@ export function LibraryProvider({ children }: PropsWithChildren) {
       .filter(
         (book) =>
           book.isbn &&
-          (!book.thumbnailUrl || !book.volumeNumber || book.seriesTitle.trim() === book.title.trim()) &&
+          (
+            !book.thumbnailUrl ||
+            isKnownUnavailableCoverUrl(book.thumbnailUrl) ||
+            !book.volumeNumber ||
+            book.seriesTitle.trim() === book.title.trim()
+          ) &&
           !enrichedIsbnsRef.current.has(book.isbn),
       )
       .slice(0, 5);
@@ -309,13 +342,15 @@ export function LibraryProvider({ children }: PropsWithChildren) {
         if (!book.isbn) continue;
 
         try {
+          const lookupTitle = buildMetadataLookupTitle(book);
           const metadata =
-            (await lookupBookByIsbn(book.isbn)) ??
-            (await lookupBookByTitle(book.title, book.isbn));
+            (await safeLookupBookByIsbn(book.isbn)) ??
+            (await lookupBookByTitle(lookupTitle, book.isbn)) ??
+            (lookupTitle === book.title ? null : await lookupBookByTitle(book.title, book.isbn));
           if (!metadata) continue;
 
           const updates: Partial<BookInput> = {
-            thumbnailUrl: metadata.thumbnailUrl ?? book.thumbnailUrl,
+            thumbnailUrl: metadata.thumbnailUrl ?? (isKnownUnavailableCoverUrl(book.thumbnailUrl) ? '' : book.thumbnailUrl),
             volumeNumber: book.volumeNumber ?? metadata.volumeNumber,
             seriesTitle:
               book.seriesTitle.trim() === book.title.trim() || parseSeriesTitle(book.seriesTitle).volumeNumber
@@ -439,17 +474,35 @@ export function LibraryProvider({ children }: PropsWithChildren) {
     const book = books.find((candidate) => candidate.id === bookId);
     if (!book) throw new Error('対象の本が見つかりません。');
 
+    const lookupTitle = buildMetadataLookupTitle(book);
     const metadata =
-      (book.isbn ? await lookupBookByIsbn(book.isbn) : null) ??
-      (await lookupBookByTitle(book.title, book.isbn));
+      (book.isbn ? await safeLookupBookByIsbn(book.isbn) : null) ??
+      (await lookupBookByTitle(lookupTitle, book.isbn)) ??
+      (lookupTitle === book.title ? null : await lookupBookByTitle(book.title, book.isbn));
     if (!metadata) throw new Error('書籍情報を再取得できませんでした。');
 
-    await updateBook(book.id, {
+    const updates = {
       seriesTitle: metadata.seriesTitle,
       volumeNumber: metadata.volumeNumber,
       author: metadata.author ?? book.author,
       thumbnailUrl: metadata.thumbnailUrl ?? '',
-    });
+    };
+    const debugEntries = metadata.thumbnailUrl
+      ? []
+      : await lookupBookDebugInfo({ isbn: book.isbn, title: lookupTitle });
+
+    await updateBook(book.id, updates);
+
+    return {
+      title: metadata.title,
+      lookupTitle,
+      beforeThumbnailUrl: book.thumbnailUrl,
+      afterThumbnailUrl: updates.thumbnailUrl,
+      seriesTitle: updates.seriesTitle,
+      volumeNumber: updates.volumeNumber,
+      author: updates.author,
+      debugEntries,
+    };
   }, [books, updateBook]);
 
   const bulkUpdateStatus = useCallback(async (bookIds: string[], status: ReadingStatus) => {
