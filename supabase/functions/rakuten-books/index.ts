@@ -1,11 +1,20 @@
 const RAKUTEN_API_BASE_URL = 'https://openapi.rakuten.co.jp/services/api';
 const DEFAULT_REFERER = 'https://github.com/ohagi-24022/BookNest';
+const PROXY_VERSION = '2026-07-02-raw-tls';
 
 declare const Deno: {
   env: {
     get: (key: string) => string | undefined;
   };
   serve: (handler: (request: Request) => Response | Promise<Response>) => void;
+  connectTls: (options: {
+    hostname: string;
+    port: number;
+  }) => Promise<{
+    read: (buffer: Uint8Array) => Promise<number | null>;
+    write: (buffer: Uint8Array) => Promise<number>;
+    close: () => void;
+  }>;
 };
 
 type RakutenProxyRequest = {
@@ -52,11 +61,11 @@ Deno.serve(async (request: Request) => {
     params.set('accessKey', accessKey);
     params.set('format', 'json');
 
-    const response = await fetch(`${RAKUTEN_API_BASE_URL}/${path}?${params.toString()}`, {
-      headers: [['Referer', referer]],
-      referrer: referer,
-    } as RequestInit);
-    const text = await response.text();
+    const response = await fetchRakuten(
+      `${RAKUTEN_API_BASE_URL}/${path}?${params.toString()}`,
+      referer,
+    );
+    const text = response.text;
     let body: unknown = text;
 
     try {
@@ -66,18 +75,152 @@ Deno.serve(async (request: Request) => {
     }
 
     return jsonResponse({
-      ok: response.ok,
+      ok: response.status >= 200 && response.status < 300,
       status: response.status,
       body,
+      proxy: {
+        version: PROXY_VERSION,
+        transport: 'raw-tls',
+        refererConfigured: Boolean(referer),
+      },
     });
   } catch (error) {
     return jsonResponse({
       ok: false,
       status: 500,
       body: { error: error instanceof Error ? error.message : 'Unknown error' },
+      proxy: {
+        version: PROXY_VERSION,
+        transport: 'raw-tls',
+        refererConfigured: false,
+      },
     });
   }
 });
+
+function fetchRakuten(url: string, referer: string): Promise<{ status: number; text: string }> {
+  return fetchRakutenOverRawTls(url, referer);
+}
+
+async function fetchRakutenOverRawTls(
+  urlString: string,
+  referer: string,
+): Promise<{ status: number; text: string }> {
+  const url = new URL(urlString);
+  const connection = await Deno.connectTls({
+    hostname: url.hostname,
+    port: 443,
+  });
+
+  try {
+    const requestText = [
+      `GET ${url.pathname}${url.search} HTTP/1.1`,
+      `Host: ${url.hostname}`,
+      `Referer: ${referer}`,
+      `Origin: ${new URL(referer).origin}`,
+      'Accept: application/json',
+      'Accept-Encoding: identity',
+      'Connection: close',
+      '',
+      '',
+    ].join('\r\n');
+    await writeAll(connection, new TextEncoder().encode(requestText));
+
+    const chunks: Uint8Array[] = [];
+    let totalLength = 0;
+    const buffer = new Uint8Array(16 * 1024);
+
+    while (true) {
+      const bytesRead = await connection.read(buffer);
+      if (bytesRead === null) break;
+      totalLength += bytesRead;
+      if (totalLength > 5 * 1024 * 1024) {
+        throw new Error('Rakuten API response exceeded 5 MB.');
+      }
+      chunks.push(buffer.slice(0, bytesRead));
+    }
+
+    const responseBytes = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      responseBytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    return parseRawHttpResponse(responseBytes);
+  } finally {
+    connection.close();
+  }
+}
+
+function parseRawHttpResponse(rawResponse: Uint8Array): { status: number; text: string } {
+  const headerEnd = findSequence(rawResponse, [13, 10, 13, 10]);
+  if (headerEnd < 0) {
+    throw new Error('Rakuten API returned an invalid HTTP response.');
+  }
+
+  const headerText = new TextDecoder().decode(rawResponse.slice(0, headerEnd));
+  const bodyBytes = rawResponse.slice(headerEnd + 4);
+  const headerLines = headerText.split('\r\n');
+  const status = Number(headerLines[0]?.match(/^HTTP\/\d(?:\.\d)?\s+(\d{3})/)?.[1] ?? 500);
+  const isChunked = headerLines.some((line) => /^transfer-encoding:\s*chunked/i.test(line));
+
+  return {
+    status,
+    text: new TextDecoder().decode(isChunked ? decodeChunkedBody(bodyBytes) : bodyBytes),
+  };
+}
+
+function decodeChunkedBody(body: Uint8Array): Uint8Array {
+  const chunks: Uint8Array[] = [];
+  let totalLength = 0;
+  let offset = 0;
+
+  while (offset < body.length) {
+    const lineEnd = findSequence(body, [13, 10], offset);
+    if (lineEnd < 0) break;
+    const sizeLine = new TextDecoder().decode(body.slice(offset, lineEnd));
+    const chunkSize = Number.parseInt(sizeLine.split(';')[0], 16);
+    if (!Number.isFinite(chunkSize)) {
+      throw new Error('Rakuten API returned an invalid chunked response.');
+    }
+    if (chunkSize === 0) break;
+
+    const chunkStart = lineEnd + 2;
+    const chunk = body.slice(chunkStart, chunkStart + chunkSize);
+    chunks.push(chunk);
+    totalLength += chunk.length;
+    offset = chunkStart + chunkSize + 2;
+  }
+
+  const decoded = new Uint8Array(totalLength);
+  let writeOffset = 0;
+  for (const chunk of chunks) {
+    decoded.set(chunk, writeOffset);
+    writeOffset += chunk.length;
+  }
+  return decoded;
+}
+
+async function writeAll(
+  connection: { write: (buffer: Uint8Array) => Promise<number> },
+  bytes: Uint8Array,
+) {
+  let offset = 0;
+  while (offset < bytes.length) {
+    offset += await connection.write(bytes.subarray(offset));
+  }
+}
+
+function findSequence(bytes: Uint8Array, sequence: number[], start = 0) {
+  outer: for (let index = start; index <= bytes.length - sequence.length; index += 1) {
+    for (let sequenceIndex = 0; sequenceIndex < sequence.length; sequenceIndex += 1) {
+      if (bytes[index + sequenceIndex] !== sequence[sequenceIndex]) continue outer;
+    }
+    return index;
+  }
+  return -1;
+}
 
 function jsonResponse(body: unknown) {
   return new Response(JSON.stringify(body), {

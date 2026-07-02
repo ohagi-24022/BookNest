@@ -38,7 +38,7 @@
     "eas:build:preview:android": "eas build --profile preview --platform android",
     "eas:build:production": "eas build --profile production",
     "eas:submit:production": "eas submit --profile production",
-    "supabase:deploy:rakuten": "supabase functions deploy rakuten-books"
+    "supabase:deploy:rakuten": "supabase functions deploy rakuten-books --use-api"
   },
   "private": true
 }

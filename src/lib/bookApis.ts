@@ -78,6 +78,12 @@ type FetchLikeResponse = {
   text: () => Promise<string>;
 };
 
+type RakutenProxyMetadata = {
+  version?: string;
+  transport?: string;
+  refererConfigured?: boolean;
+};
+
 export type BookLookupDebugEntry = {
   provider: string;
   query: string;
@@ -791,20 +797,43 @@ async function fetchRakutenProxy(proxyRequest?: RakutenProxyRequest): Promise<Fe
       ok: boolean;
       status: number;
       body: unknown;
+      proxy?: RakutenProxyMetadata;
     }>('rakuten-books', {
       body: proxyRequest,
     });
-    if (error || !data) return null;
+    if (error) {
+      return createJsonResponse(503, {
+        error: 'RAKUTEN_PROXY_INVOCATION_FAILED',
+        message: error.message,
+      });
+    }
+    if (!data) {
+      return createJsonResponse(503, {
+        error: 'RAKUTEN_PROXY_EMPTY_RESPONSE',
+      });
+    }
+
+    const body =
+      data.ok || typeof data.body !== 'object' || data.body === null
+        ? data.body
+        : {
+            ...(data.body as Record<string, unknown>),
+            proxy: data.proxy ?? { version: 'unknown' },
+          };
 
     return {
       ok: data.ok,
       status: data.status,
-      json: async () => data.body,
-      text: async () => JSON.stringify(data.body),
+      json: async () => body,
+      text: async () => JSON.stringify(body),
     };
   } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown proxy error';
     console.warn('Rakuten proxy lookup failed', error);
-    return null;
+    return createJsonResponse(503, {
+      error: 'RAKUTEN_PROXY_INVOCATION_FAILED',
+      message,
+    });
   }
 }
 

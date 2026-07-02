@@ -84,6 +84,8 @@ npx supabase secrets set RAKUTEN_REFERER=https://github.com/ohagi-24022/BookNest
 npm run supabase:deploy:rakuten
 ```
 
+The deploy script uses `--use-api`, so Docker does not need to be running.
+
 ## Supabase
 
 Database migrations are stored in `supabase/migrations`.
