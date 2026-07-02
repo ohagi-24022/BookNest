@@ -1,6 +1,7 @@
 import { BookInput } from '../types';
 import { env } from './env';
 import { parseSeriesTitle } from './series';
+import { supabase } from './supabase';
 
 type GoogleBooksResponse = {
   items?: Array<{
@@ -64,6 +65,18 @@ type ExpectedBook = Partial<Pick<BookInput, 'seriesTitle' | 'volumeNumber'>> & {
 };
 
 const RAKUTEN_APP_REFERER = 'https://github.com/ohagi-24022/BookNest';
+
+type RakutenProxyRequest = {
+  path: string;
+  params: Record<string, string>;
+};
+
+type FetchLikeResponse = {
+  ok: boolean;
+  status: number;
+  json: () => Promise<unknown>;
+  text: () => Promise<string>;
+};
 
 export type BookLookupDebugEntry = {
   provider: string;
@@ -364,8 +377,10 @@ async function lookupRakutenBooks(
   if (params.isbn) searchParams.set('isbn', normalizeIsbn(params.isbn));
   if (params.title) searchParams.set('title', params.title);
 
+  const path = 'BooksBook/Search/20170404';
   const response = await fetchRakutenWithTimeout(
     `https://openapi.rakuten.co.jp/services/api/BooksBook/Search/20170404?${searchParams.toString()}`,
+    { path, params: Object.fromEntries(searchParams.entries()) },
   );
 
   if (!response.ok) return null;
@@ -387,8 +402,10 @@ async function lookupRakutenBooksTotal(keyword: string, expected?: ExpectedBook)
     keyword,
   });
 
+  const path = 'BooksTotal/Search/20170404';
   const response = await fetchRakutenWithTimeout(
     `https://openapi.rakuten.co.jp/services/api/BooksTotal/Search/20170404?${searchParams.toString()}`,
+    { path, params: Object.fromEntries(searchParams.entries()) },
   );
 
   if (!response.ok) return null;
@@ -610,6 +627,7 @@ async function debugRakutenEndpoint(
         : 'BooksTotal/Search/20170404';
     const response = await fetchRakutenWithTimeout(
       `https://openapi.rakuten.co.jp/services/api/${path}?${searchParams.toString()}`,
+      { path, params: Object.fromEntries(searchParams.entries()) },
     );
 
     if (!response.ok) {
@@ -741,27 +759,62 @@ async function fetchWithTimeout(url: string, timeoutMs = 12000) {
   }
 }
 
-async function fetchRakutenWithTimeout(url: string, timeoutMs = 12000) {
-  const response = await fetchRakutenOnce(url, timeoutMs);
+async function fetchRakutenWithTimeout(
+  url: string,
+  proxyRequest?: RakutenProxyRequest,
+  timeoutMs = 12000,
+): Promise<FetchLikeResponse> {
+  const response = await fetchRakutenProxy(proxyRequest);
+  if (!response) {
+    return createJsonResponse(503, {
+      error: 'RAKUTEN_PROXY_UNAVAILABLE',
+      message: 'Supabase Edge Function rakuten-books is not available. Deploy it and set Supabase secrets.',
+    });
+  }
   if (response.status !== 429) return response;
 
   await new Promise((resolve) => setTimeout(resolve, 1200));
-  return fetchRakutenOnce(url, timeoutMs);
+  return (
+    (await fetchRakutenProxy(proxyRequest)) ??
+    createJsonResponse(503, {
+      error: 'RAKUTEN_PROXY_UNAVAILABLE',
+      message: 'Supabase Edge Function rakuten-books is not available after retry.',
+    })
+  );
 }
 
-async function fetchRakutenOnce(url: string, timeoutMs = 12000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+async function fetchRakutenProxy(proxyRequest?: RakutenProxyRequest): Promise<FetchLikeResponse | null> {
+  if (!supabase || !proxyRequest) return null;
 
   try {
-    return await fetch(url, {
-      headers: [['Referer', RAKUTEN_APP_REFERER]],
-      referrer: RAKUTEN_APP_REFERER,
-      signal: controller.signal,
-    } as RequestInit);
-  } finally {
-    clearTimeout(timeoutId);
+    const { data, error } = await supabase.functions.invoke<{
+      ok: boolean;
+      status: number;
+      body: unknown;
+    }>('rakuten-books', {
+      body: proxyRequest,
+    });
+    if (error || !data) return null;
+
+    return {
+      ok: data.ok,
+      status: data.status,
+      json: async () => data.body,
+      text: async () => JSON.stringify(data.body),
+    };
+  } catch (error) {
+    console.warn('Rakuten proxy lookup failed', error);
+    return null;
   }
+}
+
+function createJsonResponse(status: number, body: unknown): FetchLikeResponse {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  };
 }
 
 export function buildPurchaseUrl(seriesTitle: string, volumeNumber?: number) {

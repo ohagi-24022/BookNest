@@ -24,6 +24,7 @@
   "devDependencies": {
     "@types/react": "~19.1.10",
     "eas-cli": "^20.4.0",
+    "supabase": "^2.58.5",
     "typescript": "~5.9.2"
   },
   "scripts": {
@@ -36,7 +37,8 @@
     "eas:build:dev": "eas build --profile development",
     "eas:build:preview:android": "eas build --profile preview --platform android",
     "eas:build:production": "eas build --profile production",
-    "eas:submit:production": "eas submit --profile production"
+    "eas:submit:production": "eas submit --profile production",
+    "supabase:deploy:rakuten": "supabase functions deploy rakuten-books"
   },
   "private": true
 }

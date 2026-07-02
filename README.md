@@ -75,6 +75,15 @@ npm run start:go -- --clear
 
 Do not commit `.env`. Use `.env.example` as the shareable template.
 
+For production-like Rakuten API access, deploy the Supabase Edge Function and store the Rakuten values as Supabase secrets:
+
+```bash
+npx supabase secrets set RAKUTEN_APP_ID=your-rakuten-application-id
+npx supabase secrets set RAKUTEN_ACCESS_KEY=your-rakuten-access-key
+npx supabase secrets set RAKUTEN_REFERER=https://github.com/ohagi-24022/BookNest
+npm run supabase:deploy:rakuten
+```
+
 ## Supabase
 
 Database migrations are stored in `supabase/migrations`.
