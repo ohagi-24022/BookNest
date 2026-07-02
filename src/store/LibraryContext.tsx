@@ -485,7 +485,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
       seriesTitle: metadata.seriesTitle,
       volumeNumber: metadata.volumeNumber,
       author: metadata.author ?? book.author,
-      thumbnailUrl: metadata.thumbnailUrl ?? '',
+      thumbnailUrl: metadata.thumbnailUrl ?? book.thumbnailUrl,
     };
     const debugEntries = metadata.thumbnailUrl
       ? []

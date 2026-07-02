@@ -63,6 +63,8 @@ type ExpectedBook = Partial<Pick<BookInput, 'seriesTitle' | 'volumeNumber'>> & {
   isbn?: string;
 };
 
+const RAKUTEN_APP_REFERER = 'https://github.com/ohagi-24022/BookNest';
+
 export type BookLookupDebugEntry = {
   provider: string;
   query: string;
@@ -99,19 +101,8 @@ function firstCoverUrl(...urls: Array<string | undefined>) {
     .find((url): url is string => !!url && !isKnownUnavailableCoverUrl(url));
 }
 
-function buildRakutenIsbnCoverUrl(isbn?: string) {
-  const normalized = isbn ? normalizeIsbn(isbn) : '';
-  if (!/^[0-9]{13}$/.test(normalized)) return undefined;
-  const folder = normalized.slice(-4);
-  return `https://thumbnail.image.rakuten.co.jp/@0_mall/book/cabinet/${folder}/${normalized}.jpg?_ex=300x300`;
-}
-
 function withIsbnCoverFallback(book: BookInput | null, isbn?: string): BookInput | null {
-  if (!book || book.thumbnailUrl) return book;
-  return {
-    ...book,
-    thumbnailUrl: buildRakutenIsbnCoverUrl(book.isbn ?? isbn),
-  };
+  return book;
 }
 
 function normalizeComparableText(value?: string) {
@@ -246,6 +237,23 @@ function bookToDebugEntry(provider: string, query: string, book: BookInput | nul
   };
 }
 
+function getRakutenConfigDebugEntry(query: string): BookLookupDebugEntry {
+  const appId = env.rakutenAppId ?? '';
+  const accessKey = env.rakutenAccessKey ?? '';
+
+  return {
+    provider: 'Rakuten Config',
+    query,
+    status: appId && accessKey ? 'hit' : 'error',
+    reason: [
+      `APP ID: ${appId ? `${appId.length}文字` : 'なし'}`,
+      `Access Key: ${accessKey ? `${accessKey.length}文字` : 'なし'}`,
+    ]
+      .filter(Boolean)
+      .join(' / '),
+  };
+}
+
 function buildTitleQueries(title: string) {
   const parsed = parseSeriesTitle(title);
   const seriesVolumeQuery = parsed.volumeNumber
@@ -346,17 +354,18 @@ async function lookupRakutenBooks(
   params: { isbn?: string; title?: string },
   expected?: ExpectedBook,
 ): Promise<BookInput | null> {
-  if (!env.rakutenAppId) return null;
+  if (!env.rakutenAppId || !env.rakutenAccessKey) return null;
 
   const searchParams = new URLSearchParams({
     applicationId: env.rakutenAppId,
+    accessKey: env.rakutenAccessKey,
     format: 'json',
   });
   if (params.isbn) searchParams.set('isbn', normalizeIsbn(params.isbn));
   if (params.title) searchParams.set('title', params.title);
 
-  const response = await fetchWithTimeout(
-    `https://app.rakuten.co.jp/services/api/BooksBook/Search/20170404?${searchParams.toString()}`,
+  const response = await fetchRakutenWithTimeout(
+    `https://openapi.rakuten.co.jp/services/api/BooksBook/Search/20170404?${searchParams.toString()}`,
   );
 
   if (!response.ok) return null;
@@ -369,16 +378,17 @@ async function lookupRakutenBooks(
 }
 
 async function lookupRakutenBooksTotal(keyword: string, expected?: ExpectedBook): Promise<BookInput | null> {
-  if (!env.rakutenAppId || !keyword.trim()) return null;
+  if (!env.rakutenAppId || !env.rakutenAccessKey || !keyword.trim()) return null;
 
   const searchParams = new URLSearchParams({
     applicationId: env.rakutenAppId,
+    accessKey: env.rakutenAccessKey,
     format: 'json',
     keyword,
   });
 
-  const response = await fetchWithTimeout(
-    `https://app.rakuten.co.jp/services/api/BooksTotal/Search/20170404?${searchParams.toString()}`,
+  const response = await fetchRakutenWithTimeout(
+    `https://openapi.rakuten.co.jp/services/api/BooksTotal/Search/20170404?${searchParams.toString()}`,
   );
 
   if (!response.ok) return null;
@@ -508,7 +518,9 @@ export async function lookupBookDebugInfo(params: {
   const trimmedTitle = params.title.trim();
   const normalizedIsbn = params.isbn ? normalizeIsbn(params.isbn) : '';
   const expected = parseSeriesTitle(trimmedTitle);
-  const titleQueries = buildTitleQueries(trimmedTitle).slice(0, 3);
+  const titleQueries = buildTitleQueries(trimmedTitle).slice(0, 1);
+
+  entries.push(getRakutenConfigDebugEntry(trimmedTitle || normalizedIsbn));
 
   if (normalizedIsbn) {
     entries.push(await debugLookup('OpenBD', normalizedIsbn, () => lookupOpenBd(normalizedIsbn)));
@@ -528,7 +540,7 @@ export async function lookupBookDebugInfo(params: {
     );
   }
 
-  return entries.slice(0, 12);
+  return entries.slice(0, 8);
 }
 
 async function debugLookup(
@@ -558,7 +570,18 @@ async function debugRakutenTitleCandidates(
         provider: 'Rakuten Title',
         query,
         status: 'miss',
-        reason: '楽天APIキーなし',
+        reason: '楽天APP IDなし',
+      },
+    ];
+  }
+
+  if (!env.rakutenAccessKey) {
+    return [
+      {
+        provider: 'Rakuten Title',
+        query,
+        status: 'miss',
+        reason: '楽天Access Keyなし',
       },
     ];
   }
@@ -577,6 +600,7 @@ async function debugRakutenEndpoint(
   try {
     const searchParams = new URLSearchParams({
       applicationId: env.rakutenAppId ?? '',
+      accessKey: env.rakutenAccessKey ?? '',
       format: 'json',
     });
     searchParams.set(queryParamName, query);
@@ -584,18 +608,21 @@ async function debugRakutenEndpoint(
       queryParamName === 'title'
         ? 'BooksBook/Search/20170404'
         : 'BooksTotal/Search/20170404';
-    const response = await fetchWithTimeout(
-      `https://app.rakuten.co.jp/services/api/${path}?${searchParams.toString()}`,
+    const response = await fetchRakutenWithTimeout(
+      `https://openapi.rakuten.co.jp/services/api/${path}?${searchParams.toString()}`,
     );
 
     if (!response.ok) {
       const errorBody = await response.text();
+      const reason = errorBody.includes('specify valid applicationId')
+        ? '楽天APP IDが無効扱いです。.envのEXPO_PUBLIC_RAKUTEN_APP_IDに楽天画面のアプリケーションIDを入れて、Expoを再起動してください。'
+        : errorBody.slice(0, 120);
       return [
         {
           provider,
           query,
           status: 'error',
-          reason: [`HTTP ${response.status}`, errorBody.slice(0, 120)].filter(Boolean).join(': '),
+          reason: [`HTTP ${response.status}`, reason].filter(Boolean).join(': '),
         },
       ];
     }
@@ -709,6 +736,29 @@ async function fetchWithTimeout(url: string, timeoutMs = 12000) {
 
   try {
     return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchRakutenWithTimeout(url: string, timeoutMs = 12000) {
+  const response = await fetchRakutenOnce(url, timeoutMs);
+  if (response.status !== 429) return response;
+
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  return fetchRakutenOnce(url, timeoutMs);
+}
+
+async function fetchRakutenOnce(url: string, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      headers: [['Referer', RAKUTEN_APP_REFERER]],
+      referrer: RAKUTEN_APP_REFERER,
+      signal: controller.signal,
+    } as RequestInit);
   } finally {
     clearTimeout(timeoutId);
   }

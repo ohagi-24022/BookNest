@@ -48,6 +48,7 @@ EXPO_PUBLIC_SUPABASE_URL=
 EXPO_PUBLIC_SUPABASE_ANON_KEY=
 EXPO_PUBLIC_GOOGLE_BOOKS_API_KEY=
 EXPO_PUBLIC_RAKUTEN_APP_ID=
+EXPO_PUBLIC_RAKUTEN_ACCESS_KEY=
 ```
 
 Start with Expo Go:
@@ -70,6 +71,7 @@ npm run start:go -- --clear
 | `EXPO_PUBLIC_SUPABASE_ANON_KEY` | Yes | Supabase anon public key |
 | `EXPO_PUBLIC_GOOGLE_BOOKS_API_KEY` | Recommended | Google Books API key |
 | `EXPO_PUBLIC_RAKUTEN_APP_ID` | Optional | Rakuten Web Service application ID for better Japanese book metadata and cover images |
+| `EXPO_PUBLIC_RAKUTEN_ACCESS_KEY` | Optional | Rakuten Web Service access key. Required together with the Rakuten application ID |
 
 Do not commit `.env`. Use `.env.example` as the shareable template.
 

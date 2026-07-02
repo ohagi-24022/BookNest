@@ -39,12 +39,6 @@ function buildRakutenCoverUrl(isbn?: string) {
   return `https://thumbnail.image.rakuten.co.jp/@0_mall/book/cabinet/${folder}/${normalized}.jpg?_ex=300x300`;
 }
 
-function buildAmazonCoverUrl(isbn?: string) {
-  const normalized = normalizeIsbn(isbn);
-  if (!normalized || !/^[0-9]{10,13}$/.test(normalized)) return undefined;
-  return `https://images-na.ssl-images-amazon.com/images/P/${normalized}.09.LZZZZZZZ.jpg`;
-}
-
 function uniqueUrls(urls: Array<string | undefined>) {
   return [...new Set(urls.filter((url): url is string => !!url))];
 }
@@ -63,7 +57,6 @@ export function BookCover({
           ? undefined
           : normalizeImageUrl(thumbnailUrl),
         buildRakutenCoverUrl(isbn),
-        buildAmazonCoverUrl(isbn),
         buildOpenLibraryCoverUrl(isbn),
       ]),
     [isbn, thumbnailUrl],
