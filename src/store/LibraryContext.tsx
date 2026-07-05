@@ -11,7 +11,7 @@ import {
 } from 'react';
 
 import { BookLookupDebugEntry, lookupBookByIsbn, lookupBookByTitle, lookupBookDebugInfo } from '../lib/bookApis';
-import { getMissingVolumes, parseSeriesTitle } from '../lib/series';
+import { getMissingVolumes, normalizeSeriesKey, parseSeriesTitle } from '../lib/series';
 import { supabase } from '../lib/supabase';
 import { Book, BookInput, MissingBook, ReadingStatus, ShelfItem } from '../types';
 import { useAuth } from './AuthContext';
@@ -47,8 +47,14 @@ type SeriesGroup = {
   representative: Book;
   ownedCount: number;
   unreadCount: number;
+  readingCount: number;
   readCount: number;
   latestVolume?: number;
+  latestAddedAt: string;
+};
+
+type AddBookOptions = {
+  allowDuplicate?: boolean;
 };
 
 type MetadataRepairResult = {
@@ -67,9 +73,12 @@ type LibraryContextValue = {
   loading: boolean;
   error: string | null;
   requiresAuth: boolean;
+  localImportCount: number;
   seriesGroups: SeriesGroup[];
-  addBook: (book: BookInput) => Promise<Book>;
+  addBook: (book: BookInput, options?: AddBookOptions) => Promise<Book>;
   addBookByIsbn: (isbn: string) => Promise<Book | null>;
+  findDuplicateBook: (book: BookInput) => Book | undefined;
+  migrateLocalBooks: () => Promise<number>;
   updateBook: (bookId: string, updates: Partial<BookInput>) => Promise<void>;
   deleteBook: (bookId: string) => Promise<void>;
   repairBookMetadata: (bookId: string) => Promise<MetadataRepairResult>;
@@ -155,14 +164,16 @@ function toBookUpdate(updates: Partial<BookInput>) {
 
 function formatSupabaseError(error: unknown, fallback: string) {
   const supabaseError = error as SupabaseLikeError;
-  const parts = [
-    supabaseError.message,
-    supabaseError.details,
-    supabaseError.hint,
-    supabaseError.code ? `code: ${supabaseError.code}` : undefined,
-  ].filter(Boolean);
-
-  return parts.length > 0 ? parts.join(' / ') : fallback;
+  if (supabaseError.code === '42501') {
+    return '蔵書データへのアクセス権限がありません。Supabaseの権限設定を確認してください。';
+  }
+  if (supabaseError.code === '23505') {
+    return '同じISBNの本がすでに登録されています。';
+  }
+  if (/fetch|network|timeout/i.test(supabaseError.message ?? '')) {
+    return '通信できませんでした。接続を確認して、もう一度お試しください。';
+  }
+  return fallback;
 }
 
 function createId(prefix: string) {
@@ -193,10 +204,22 @@ function buildMetadataLookupTitle(book: Pick<Book, 'title' | 'seriesTitle' | 'vo
   return book.volumeNumber ? `${book.seriesTitle} ${book.volumeNumber}巻` : book.title;
 }
 
-function isDuplicateIsbn(currentBooks: Book[], bookInput: BookInput) {
+function findDuplicate(currentBooks: Book[], bookInput: BookInput) {
   const incomingIsbn = normalizeIsbn(bookInput.isbn);
-  if (!incomingIsbn) return false;
-  return currentBooks.some((book) => normalizeIsbn(book.isbn) === incomingIsbn);
+  if (incomingIsbn) {
+    const isbnMatch = currentBooks.find((book) => normalizeIsbn(book.isbn) === incomingIsbn);
+    if (isbnMatch) return isbnMatch;
+  }
+
+  const normalizedInput = normalizeBookInput(bookInput);
+  if (!normalizedInput.volumeNumber || !normalizedInput.seriesTitle.trim()) return undefined;
+  const seriesKey = normalizeSeriesKey(normalizedInput.seriesTitle);
+
+  return currentBooks.find(
+    (book) =>
+      book.volumeNumber === normalizedInput.volumeNumber &&
+      normalizeSeriesKey(book.seriesTitle) === seriesKey,
+  );
 }
 
 const initialBooks: Book[] = [
@@ -254,20 +277,22 @@ export function LibraryProvider({ children }: PropsWithChildren) {
   const { configured, initializing, user } = useAuth();
   const [books, setBooks] = useState<Book[]>(configured ? [] : initialBooks);
   const [hydrated, setHydrated] = useState(false);
+  const [pendingLocalBooks, setPendingLocalBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(configured);
   const [error, setError] = useState<string | null>(null);
   const enrichedIsbnsRef = useRef(new Set<string>());
   const requiresAuth = configured && !user;
 
   useEffect(() => {
-    if (configured) {
-      setHydrated(true);
-      return;
-    }
-
     AsyncStorage.getItem(STORAGE_KEY)
       .then((storedBooks) => {
-        if (storedBooks) setBooks(JSON.parse(storedBooks) as Book[]);
+        if (!storedBooks) return;
+        const parsedBooks = JSON.parse(storedBooks) as Book[];
+        if (configured) {
+          setPendingLocalBooks(parsedBooks.filter((book) => !book.id.startsWith('demo-')));
+        } else {
+          setBooks(parsedBooks);
+        }
       })
       .finally(() => setHydrated(true));
   }, [configured]);
@@ -383,10 +408,15 @@ export function LibraryProvider({ children }: PropsWithChildren) {
     enrichBooks();
   }, [books, configured, user]);
 
-  const addBook = useCallback(async (bookInput: BookInput) => {
+  const findDuplicateBook = useCallback(
+    (bookInput: BookInput) => findDuplicate(books, bookInput),
+    [books],
+  );
+
+  const addBook = useCallback(async (bookInput: BookInput, options: AddBookOptions = {}) => {
     const normalizedBookInput = normalizeBookInput(bookInput);
-    if (isDuplicateIsbn(books, normalizedBookInput)) {
-      throw new Error('この本はすでに登録されています。');
+    if (!options.allowDuplicate && findDuplicate(books, normalizedBookInput)) {
+      throw new Error('同じISBN、または同じシリーズ・巻数の本がすでに登録されています。');
     }
 
     if (configured) {
@@ -399,7 +429,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
 
       if (insertError) {
         if (insertError.code === '23505') {
-          throw new Error('この本はすでに登録されています。');
+          throw new Error('同じISBNの本がすでに登録されています。');
         }
         throw new Error(formatSupabaseError(insertError, 'Supabaseへの登録に失敗しました。'));
       }
@@ -434,8 +464,67 @@ export function LibraryProvider({ children }: PropsWithChildren) {
     [addBook],
   );
 
+  const migrateLocalBooks = useCallback(async () => {
+    if (!supabase || !user) {
+      throw new Error('ローカル蔵書を移行するにはログインしてください。');
+    }
+
+    const comparisonBooks = [...books];
+    const booksToImport: Book[] = [];
+
+    for (const localBook of pendingLocalBooks) {
+      const input = normalizeBookInput({
+        isbn: localBook.isbn,
+        title: localBook.title,
+        seriesTitle: localBook.seriesTitle,
+        volumeNumber: localBook.volumeNumber,
+        author: localBook.author,
+        thumbnailUrl: localBook.thumbnailUrl,
+        status: localBook.status,
+      });
+      if (findDuplicate(comparisonBooks, input)) continue;
+
+      const importedBook: Book = {
+        ...input,
+        id: createUuid(),
+        userId: user.id,
+        createdAt: localBook.createdAt || now(),
+      };
+      booksToImport.push(importedBook);
+      comparisonBooks.push(importedBook);
+    }
+
+    if (booksToImport.length > 0) {
+      const { error: insertError } = await supabase
+        .from('books')
+        .insert(booksToImport.map((book) => toBookInsert(book, user.id, book.id)));
+      if (insertError) {
+        throw new Error(formatSupabaseError(insertError, 'ローカル蔵書を移行できませんでした。'));
+      }
+      setBooks((currentBooks) => [...booksToImport, ...currentBooks]);
+    }
+
+    await AsyncStorage.removeItem(STORAGE_KEY);
+    setPendingLocalBooks([]);
+    return booksToImport.length;
+  }, [books, pendingLocalBooks, user]);
+
   const updateBook = useCallback(async (bookId: string, updates: Partial<BookInput>) => {
     const book = books.find((candidate) => candidate.id === bookId);
+    const changesIdentity =
+      updates.isbn !== undefined ||
+      updates.seriesTitle !== undefined ||
+      updates.volumeNumber !== undefined;
+
+    if (book && changesIdentity) {
+      const duplicate = findDuplicate(
+        books.filter((candidate) => candidate.id !== bookId),
+        normalizeBookInput({ ...book, ...updates }),
+      );
+      if (duplicate) {
+        throw new Error(`${duplicate.title} と同じシリーズ・巻数、またはISBNになっています。`);
+      }
+    }
 
     if (configured) {
       if (!supabase || !user) throw new Error('ログインすると蔵書を編集できます。');
@@ -548,8 +637,13 @@ export function LibraryProvider({ children }: PropsWithChildren) {
           representative,
           ownedCount: groupedBooks.length,
           unreadCount: groupedBooks.filter((book) => book.status === 'unread').length,
+          readingCount: groupedBooks.filter((book) => book.status === 'reading').length,
           readCount: groupedBooks.filter((book) => book.status === 'read').length,
           latestVolume,
+          latestAddedAt: groupedBooks.reduce(
+            (latest, book) => (book.createdAt > latest ? book.createdAt : latest),
+            groupedBooks[0]?.createdAt ?? '',
+          ),
         };
       })
       .sort((a, b) => a.title.localeCompare(b.title));
@@ -587,9 +681,12 @@ export function LibraryProvider({ children }: PropsWithChildren) {
       loading,
       error,
       requiresAuth,
+      localImportCount: pendingLocalBooks.length,
       seriesGroups,
       addBook,
       addBookByIsbn,
+      findDuplicateBook,
+      migrateLocalBooks,
       updateBook,
       deleteBook,
       repairBookMetadata,
@@ -603,8 +700,11 @@ export function LibraryProvider({ children }: PropsWithChildren) {
       bulkUpdateStatus,
       deleteBook,
       error,
+      findDuplicateBook,
       getSeriesItems,
       loading,
+      migrateLocalBooks,
+      pendingLocalBooks.length,
       repairBookMetadata,
       requiresAuth,
       seriesGroups,

@@ -1,6 +1,8 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import {
+  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -11,6 +13,7 @@ import {
   View,
 } from 'react-native';
 
+import { BookCover } from '../../src/components/BookCover';
 import { isBookIsbnBarcode, lookupBookByIsbn } from '../../src/lib/bookApis';
 import { parseSeriesTitle } from '../../src/lib/series';
 import { useLibrary } from '../../src/store/LibraryContext';
@@ -33,11 +36,13 @@ function normalizeBarcode(data: string) {
 }
 
 export default function ScanScreen() {
+  const router = useRouter();
   const [permission, requestPermission] = useCameraPermissions();
-  const { addBook } = useLibrary();
+  const { addBook, findDuplicateBook } = useLibrary();
   const { colors } = useAppTheme();
   const [isScanning, setIsScanning] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showConfirmation, setShowConfirmation] = useState(false);
   const [scanMode, setScanMode] = useState<'confirm' | 'continuous'>('confirm');
   const [notice, setNotice] = useState<ScanNotice>({
     tone: 'neutral',
@@ -51,6 +56,7 @@ export default function ScanScreen() {
   const [seriesTitle, setSeriesTitle] = useState('');
   const [volumeNumber, setVolumeNumber] = useState('');
   const [isbn, setIsbn] = useState('');
+  const [thumbnailUrl, setThumbnailUrl] = useState('');
   const [status, setStatus] = useState<ReadingStatus>('unread');
 
   const onTitleChange = (value: string) => {
@@ -68,7 +74,79 @@ export default function ScanScreen() {
     setSeriesTitle(bookInput.seriesTitle);
     setVolumeNumber(bookInput.volumeNumber ? String(bookInput.volumeNumber) : '');
     setIsbn(bookInput.isbn ?? '');
+    setThumbnailUrl(bookInput.thumbnailUrl ?? '');
     setStatus(bookInput.status);
+    setShowConfirmation(true);
+  };
+
+  const currentBookInput = (): BookInput => ({
+    isbn: isbn.trim() || undefined,
+    title: title.trim(),
+    author: author.trim() || undefined,
+    seriesTitle: seriesTitle.trim(),
+    volumeNumber: volumeNumber ? Number.parseInt(volumeNumber, 10) : undefined,
+    thumbnailUrl: thumbnailUrl || undefined,
+    status,
+  });
+
+  const resetForm = () => {
+    setTitle('');
+    setAuthor('');
+    setSeriesTitle('');
+    setVolumeNumber('');
+    setIsbn('');
+    setThumbnailUrl('');
+    setStatus('unread');
+    setShowConfirmation(false);
+    setIsScanning(true);
+    lastScanRef.current = { isbn: '', at: 0 };
+    processingRef.current = false;
+  };
+
+  const performAdd = async (bookInput: BookInput, allowDuplicate = false) => {
+    setIsSubmitting(true);
+    try {
+      const book = await addBook(bookInput, { allowDuplicate });
+      resetForm();
+      setNotice({ tone: 'success', message: `${book.title} を追加しました。` });
+      router.replace('/');
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : '登録に失敗しました。',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const addWithDuplicateConfirmation = async () => {
+    const bookInput = currentBookInput();
+    const duplicate = findDuplicateBook(bookInput);
+    if (!duplicate) {
+      await performAdd(bookInput);
+      return;
+    }
+    const incomingIsbn = normalizeBarcode(bookInput.isbn ?? '');
+    const duplicateIsbn = normalizeBarcode(duplicate.isbn ?? '');
+    if (incomingIsbn && incomingIsbn === duplicateIsbn) {
+      Alert.alert('登録済みです', `${duplicate.title} はすでに本棚にあります。`);
+      return;
+    }
+
+    Alert.alert(
+      '重複の可能性があります',
+      `${duplicate.title} がすでに登録されています。同じ本として追加を続けますか？`,
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: '追加する',
+          onPress: () => {
+            void performAdd(bookInput, true);
+          },
+        },
+      ],
+    );
   };
 
   const lookupManualIsbn = async () => {
@@ -94,7 +172,7 @@ export default function ScanScreen() {
       }
 
       applyLookupResult(bookInput);
-      setNotice({ tone: 'success', message: `${bookInput.title} を入力フォームに反映しました。` });
+      setNotice({ tone: 'success', message: `${bookInput.title} の内容を確認してください。` });
     } catch (error) {
       setNotice({
         tone: 'error',
@@ -137,8 +215,10 @@ export default function ScanScreen() {
         if (bookInput) {
           applyLookupResult({ ...bookInput, isbn: bookInput.isbn ?? normalized });
           if (scanMode === 'continuous') {
+            setShowConfirmation(false);
             try {
               const book = await addBook({ ...bookInput, isbn: bookInput.isbn ?? normalized });
+              resetForm();
               setNotice({ tone: 'success', message: `${book.title} を追加しました。次の本を読み取れます。` });
             } catch (error) {
               setNotice({
@@ -180,35 +260,20 @@ export default function ScanScreen() {
     [addBook, isScanning, scanMode],
   );
 
-  const submitManual = async () => {
+  const reviewManual = () => {
     if (!title.trim() || !seriesTitle.trim()) {
       setNotice({ tone: 'warning', message: 'タイトルとシリーズ名は必須です。' });
       return;
     }
 
-    try {
-      await addBook({
-        isbn: isbn.trim() || undefined,
-        title: title.trim(),
-        author: author.trim() || undefined,
-        seriesTitle: seriesTitle.trim(),
-        volumeNumber: volumeNumber ? Number.parseInt(volumeNumber, 10) : undefined,
-        status,
-      });
-
-      setTitle('');
-      setAuthor('');
-      setSeriesTitle('');
-      setVolumeNumber('');
-      setIsbn('');
-      setStatus('unread');
-      setNotice({ tone: 'success', message: '書籍を追加しました。' });
-    } catch (error) {
-      setNotice({
-        tone: 'error',
-        message: error instanceof Error ? error.message : '登録に失敗しました。',
-      });
+    if (volumeNumber && !Number.isInteger(Number(volumeNumber))) {
+      setNotice({ tone: 'warning', message: '巻数は整数で入力してください。' });
+      return;
     }
+
+    setShowConfirmation(true);
+    setIsScanning(false);
+    setNotice({ tone: 'neutral', message: '内容を確認して追加してください。' });
   };
 
   const noticeColor =
@@ -234,7 +299,7 @@ export default function ScanScreen() {
       style={[styles.screen, { backgroundColor: colors.background }]}
     >
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.cameraShell}>
+        {!showConfirmation && <View style={styles.cameraShell}>
           {permission?.granted ? (
             <CameraView
               barcodeScannerSettings={{ barcodeTypes: ['ean13', 'ean8', 'upc_a', 'upc_e'] }}
@@ -251,13 +316,13 @@ export default function ScanScreen() {
               </Pressable>
             </View>
           )}
-        </View>
+        </View>}
 
         <View style={[styles.notice, { backgroundColor: noticeColor }]}>
           <Text style={[styles.noticeText, { color: noticeTextColor }]}>{notice.message}</Text>
         </View>
 
-        <View style={styles.scanControls}>
+        {!showConfirmation && <View style={styles.scanControls}>
           <View style={[styles.modeSwitch, { backgroundColor: colors.elevated }]}>
             {[
               ['confirm', '確認'],
@@ -287,9 +352,48 @@ export default function ScanScreen() {
               {isSubmitting ? '検索中' : isScanning ? 'スキャン停止' : 'スキャン再開'}
             </Text>
           </Pressable>
-        </View>
+        </View>}
 
-        <View style={[styles.form, { borderTopColor: colors.border }]}>
+        {showConfirmation && (
+          <View style={[styles.confirmation, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <BookCover
+              thumbnailUrl={thumbnailUrl || undefined}
+              isbn={isbn || undefined}
+              style={styles.confirmationCover}
+              placeholderText="表紙なし"
+            />
+            <View style={styles.confirmationBody}>
+              <Text style={[styles.confirmationTitle, { color: colors.text }]}>{title}</Text>
+              <Text style={[styles.confirmationMeta, { color: colors.muted }]}>
+                {seriesTitle}
+                {volumeNumber ? ` / ${volumeNumber}巻` : ' / 巻数なし'}
+              </Text>
+              {!!author && <Text style={[styles.confirmationMeta, { color: colors.muted }]}>{author}</Text>}
+              {!!isbn && <Text style={[styles.confirmationIsbn, { color: colors.muted }]}>ISBN {isbn}</Text>}
+              <View style={styles.confirmationActions}>
+                <Pressable
+                  onPress={() => setShowConfirmation(false)}
+                  style={[styles.secondaryButton, { borderColor: colors.border }]}
+                >
+                  <Text style={[styles.secondaryButtonText, { color: colors.text }]}>修正する</Text>
+                </Pressable>
+                <Pressable
+                  disabled={isSubmitting}
+                  onPress={() => void addWithDuplicateConfirmation()}
+                  style={[
+                    styles.confirmAddButton,
+                    { backgroundColor: colors.primary },
+                    isSubmitting && styles.disabled,
+                  ]}
+                >
+                  <Text style={styles.primaryButtonText}>{isSubmitting ? '追加中' : '追加'}</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {!showConfirmation && <View style={[styles.form, { borderTopColor: colors.border }]}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>手動登録</Text>
           <TextInput
             value={title}
@@ -353,10 +457,10 @@ export default function ScanScreen() {
               </Pressable>
             ))}
           </View>
-          <Pressable style={[styles.submitButton, { backgroundColor: colors.text }]} onPress={submitManual}>
-            <Text style={[styles.submitButtonText, { color: colors.background }]}>確認して追加</Text>
+          <Pressable style={[styles.submitButton, { backgroundColor: colors.text }]} onPress={reviewManual}>
+            <Text style={[styles.submitButtonText, { color: colors.background }]}>内容を確認</Text>
           </Pressable>
-        </View>
+        </View>}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -400,6 +504,41 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.55 },
   primaryButtonText: { color: '#ffffff', fontSize: 15, fontWeight: '800' },
   form: { borderTopWidth: 1, paddingTop: 18 },
+  confirmation: {
+    alignItems: 'flex-start',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 14,
+    padding: 14,
+  },
+  confirmationCover: {
+    backgroundColor: '#e5e5e5',
+    borderRadius: 4,
+    height: 168,
+    width: 114,
+  },
+  confirmationBody: { flex: 1, minWidth: 0 },
+  confirmationTitle: { fontSize: 18, fontWeight: '900', lineHeight: 24 },
+  confirmationMeta: { fontSize: 14, lineHeight: 20, marginTop: 6 },
+  confirmationIsbn: { fontSize: 12, marginTop: 10 },
+  confirmationActions: { flexDirection: 'row', gap: 8, marginTop: 16 },
+  secondaryButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    flex: 1,
+    height: 42,
+    justifyContent: 'center',
+  },
+  secondaryButtonText: { fontSize: 13, fontWeight: '800' },
+  confirmAddButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    flex: 1,
+    height: 42,
+    justifyContent: 'center',
+  },
   sectionTitle: { fontSize: 18, fontWeight: '800', marginBottom: 12 },
   input: {
     borderRadius: 8,

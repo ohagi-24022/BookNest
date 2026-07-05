@@ -14,6 +14,7 @@ import {
 import { envStatus } from '../../src/lib/env';
 import { useAppSettings } from '../../src/store/AppSettingsContext';
 import { useAuth } from '../../src/store/AuthContext';
+import { useLibrary } from '../../src/store/LibraryContext';
 import { ThemeMode, useAppTheme } from '../../src/store/ThemeContext';
 
 const themeOptions: Array<{ label: string; value: ThemeMode }> = [
@@ -24,11 +25,18 @@ const themeOptions: Array<{ label: string; value: ThemeMode }> = [
 
 export default function SettingsScreen() {
   const { configured, initializing, user, signIn, signOut, signUp } = useAuth();
-  const { openExternalPurchaseLinks, setOpenExternalPurchaseLinks } = useAppSettings();
+  const { localImportCount, migrateLocalBooks } = useLibrary();
+  const {
+    openExternalPurchaseLinks,
+    setOpenExternalPurchaseLinks,
+    showPublishedLatestVolume,
+    setShowPublishedLatestVolume,
+  } = useAppSettings();
   const { colors, mode, setMode } = useAppTheme();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [migrationSubmitting, setMigrationSubmitting] = useState(false);
 
   const submitAuth = async (authMode: 'signIn' | 'signUp') => {
     if (!email.trim() || !password) {
@@ -63,6 +71,18 @@ export default function SettingsScreen() {
     }
   };
 
+  const submitLocalMigration = async () => {
+    setMigrationSubmitting(true);
+    try {
+      const importedCount = await migrateLocalBooks();
+      Alert.alert('移行が完了しました', `${importedCount}冊をクラウド本棚へ追加しました。`);
+    } catch (error) {
+      Alert.alert('移行できませんでした', error instanceof Error ? error.message : 'もう一度お試しください。');
+    } finally {
+      setMigrationSubmitting(false);
+    }
+  };
+
   return (
     <ScrollView style={[styles.screen, { backgroundColor: colors.background }]} contentContainerStyle={styles.content}>
       <View style={[styles.section, { borderBottomColor: colors.border }]}>
@@ -82,6 +102,27 @@ export default function SettingsScreen() {
             <Pressable disabled={authSubmitting} style={[styles.neutralButton, { borderColor: colors.border }]} onPress={submitSignOut}>
               <Text style={[styles.neutralButtonText, { color: colors.text }]}>ログアウト</Text>
             </Pressable>
+            {localImportCount > 0 && (
+              <View style={[styles.pendingBox, { backgroundColor: colors.elevated }]}>
+                <Text style={[styles.rowTitle, { color: colors.text }]}>ローカル蔵書を移行</Text>
+                <Text style={[styles.rowCopy, { color: colors.muted }]}>
+                  この端末にある{localImportCount}冊をクラウド本棚へ移します。重複は自動で除外されます。
+                </Text>
+                <Pressable
+                  disabled={migrationSubmitting}
+                  onPress={() => void submitLocalMigration()}
+                  style={[
+                    styles.neutralButton,
+                    { borderColor: colors.border },
+                    migrationSubmitting && styles.disabledButton,
+                  ]}
+                >
+                  <Text style={[styles.neutralButtonText, { color: colors.text }]}>
+                    {migrationSubmitting ? '移行中' : 'クラウドへ移行'}
+                  </Text>
+                </Pressable>
+              </View>
+            )}
             <View style={[styles.pendingBox, { backgroundColor: colors.elevated }]}>
               <Text style={[styles.rowTitle, { color: colors.text }]}>アカウント削除</Text>
               <Text style={[styles.rowCopy, { color: colors.muted }]}>
@@ -192,6 +233,20 @@ export default function SettingsScreen() {
 
       <View style={[styles.section, { borderBottomColor: colors.border }]}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>表示</Text>
+        <View style={styles.row}>
+          <View style={styles.rowText}>
+            <Text style={[styles.rowTitle, { color: colors.text }]}>刊行最新巻を表示</Text>
+            <Text style={[styles.rowCopy, { color: colors.muted }]}>
+              ONにすると、本棚でAPIから取得した刊行巻数を表示します。各シリーズの更新ボタンで取得できます。
+            </Text>
+          </View>
+          <Switch
+            onValueChange={setShowPublishedLatestVolume}
+            thumbColor="#ffffff"
+            trackColor={{ false: '#d4d4d4', true: '#31c759' }}
+            value={showPublishedLatestVolume}
+          />
+        </View>
         <View style={[styles.segmented, { backgroundColor: colors.elevated }]}>
           {themeOptions.map((option) => (
             <Pressable

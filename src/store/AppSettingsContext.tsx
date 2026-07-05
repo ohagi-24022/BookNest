@@ -12,14 +12,17 @@ const STORAGE_KEY = 'booknest.app-settings.v1';
 
 type AppSettings = {
   openExternalPurchaseLinks: boolean;
+  showPublishedLatestVolume: boolean;
 };
 
 type AppSettingsContextValue = AppSettings & {
   setOpenExternalPurchaseLinks: (value: boolean) => void;
+  setShowPublishedLatestVolume: (value: boolean) => void;
 };
 
 const defaultSettings: AppSettings = {
   openExternalPurchaseLinks: false,
+  showPublishedLatestVolume: false,
 };
 
 const AppSettingsContext = createContext<AppSettingsContextValue | null>(null);
@@ -48,6 +51,8 @@ export function AppSettingsProvider({ children }: PropsWithChildren) {
       ...settings,
       setOpenExternalPurchaseLinks: (openExternalPurchaseLinks: boolean) =>
         setSettings((current) => ({ ...current, openExternalPurchaseLinks })),
+      setShowPublishedLatestVolume: (showPublishedLatestVolume: boolean) =>
+        setSettings((current) => ({ ...current, showPublishedLatestVolume })),
     }),
     [settings],
   );

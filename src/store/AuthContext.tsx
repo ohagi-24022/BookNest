@@ -23,6 +23,26 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+function toAuthMessage(error: { message?: string }) {
+  const message = error.message ?? '';
+  if (/invalid login credentials/i.test(message)) {
+    return 'メールアドレスまたはパスワードが正しくありません。';
+  }
+  if (/email not confirmed/i.test(message)) {
+    return '確認メールのリンクを開いてからログインしてください。';
+  }
+  if (/user already registered/i.test(message)) {
+    return 'このメールアドレスはすでに登録されています。';
+  }
+  if (/password/i.test(message)) {
+    return 'パスワードの条件を満たしていません。6文字以上で入力してください。';
+  }
+  if (/fetch|network|timeout/i.test(message)) {
+    return '通信できませんでした。接続を確認して、もう一度お試しください。';
+  }
+  return '認証処理を完了できませんでした。しばらくしてからもう一度お試しください。';
+}
+
 export function AuthProvider({ children }: PropsWithChildren) {
   const [session, setSession] = useState<Session | null>(null);
   const [initializing, setInitializing] = useState(true);
@@ -50,13 +70,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const signIn = useCallback(async (email: string, password: string) => {
     if (!supabase) throw new Error('Supabase is not configured.');
     const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
+    if (error) throw new Error(toAuthMessage(error));
   }, []);
 
   const signUp = useCallback(async (email: string, password: string) => {
     if (!supabase) throw new Error('Supabase is not configured.');
     const { error } = await supabase.auth.signUp({ email, password });
-    if (error) throw error;
+    if (error) throw new Error(toAuthMessage(error));
   }, []);
 
   const signOut = useCallback(async () => {

@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 
 import { BookCover } from '../../src/components/BookCover';
-import { buildPurchaseUrl } from '../../src/lib/bookApis';
+import { buildPurchaseUrl, lookupBookByTitle } from '../../src/lib/bookApis';
 import { useAppSettings } from '../../src/store/AppSettingsContext';
 import { useLibrary } from '../../src/store/LibraryContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
@@ -33,7 +33,8 @@ export default function SeriesScreen() {
   const params = useLocalSearchParams<{ title: string }>();
   const navigation = useNavigation();
   const seriesTitle = decodeURIComponent(params.title ?? '');
-  const { getSeriesItems, bulkUpdateStatus, updateBook, deleteBook, repairBookMetadata } = useLibrary();
+  const { addBook, getSeriesItems, bulkUpdateStatus, updateBook, deleteBook, repairBookMetadata } =
+    useLibrary();
   const { openExternalPurchaseLinks } = useAppSettings();
   const { colors } = useAppTheme();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -51,18 +52,42 @@ export default function SeriesScreen() {
 
   const toggleSelected = (item: ShelfItem) => {
     if (!isOwnedBook(item)) {
-      const purchaseUrl = buildPurchaseUrl(item.seriesTitle, item.volumeNumber);
-      if (openExternalPurchaseLinks) {
-        Linking.openURL(purchaseUrl);
-      } else {
-        WebBrowser.openBrowserAsync(purchaseUrl);
-      }
       return;
     }
 
     setSelectedIds((current) =>
       current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id],
     );
+  };
+
+  const openPurchaseCandidates = async (item: ShelfItem) => {
+    const purchaseUrl = buildPurchaseUrl(item.seriesTitle, item.volumeNumber);
+    if (openExternalPurchaseLinks) {
+      await Linking.openURL(purchaseUrl);
+    } else {
+      await WebBrowser.openBrowserAsync(purchaseUrl);
+    }
+  };
+
+  const addMissingAsOwned = async (item: ShelfItem) => {
+    if (isOwnedBook(item) || refreshingId) return;
+    setRefreshingId(item.id);
+    try {
+      const metadata = await lookupBookByTitle(`${item.seriesTitle} ${item.volumeNumber}巻`);
+      await addBook({
+        isbn: metadata?.isbn,
+        title: metadata?.title ?? item.title,
+        seriesTitle: item.seriesTitle,
+        volumeNumber: item.volumeNumber,
+        author: metadata?.author,
+        thumbnailUrl: metadata?.thumbnailUrl,
+        status: 'unread',
+      });
+    } catch (error) {
+      Alert.alert('追加できませんでした', error instanceof Error ? error.message : 'もう一度お試しください。');
+    } finally {
+      setRefreshingId(null);
+    }
   };
 
   const updateSelected = async (status: ReadingStatus) => {
@@ -191,7 +216,7 @@ export default function SeriesScreen() {
               ]}
             >
               <Pressable
-                onPress={() => toggleSelected(item)}
+                onPress={() => (missing ? void addMissingAsOwned(item) : toggleSelected(item))}
                 style={[styles.checkbox, { borderColor: colors.border }]}
               >
                 <Text style={[styles.checkboxText, { color: colors.text }]}>{selected ? '✓' : missing ? '+' : ''}</Text>
@@ -204,7 +229,6 @@ export default function SeriesScreen() {
                 placeholderText={`No.${item.volumeNumber ?? '-'}`}
               />
               <Pressable
-                disabled={missing}
                 onLongPress={() => isOwnedBook(item) && startEditing(item)}
                 style={styles.rowBody}
               >
@@ -215,6 +239,29 @@ export default function SeriesScreen() {
                   {item.volumeNumber ? `${item.volumeNumber}巻` : '巻数なし'} /{' '}
                   {missing ? '未所持' : statusLabels[item.status]}
                 </Text>
+                {missing && (
+                  <View style={styles.actionRow}>
+                    <Pressable
+                      onPress={() => void openPurchaseCandidates(item)}
+                      style={[styles.smallButton, { borderColor: colors.primary }]}
+                    >
+                      <Text style={[styles.smallButtonText, { color: colors.primary }]}>購入候補</Text>
+                    </Pressable>
+                    <Pressable
+                      disabled={refreshingId === item.id}
+                      onPress={() => void addMissingAsOwned(item)}
+                      style={[
+                        styles.smallButton,
+                        { backgroundColor: colors.text, borderColor: colors.text },
+                        refreshingId === item.id && styles.disabledButton,
+                      ]}
+                    >
+                      <Text style={[styles.smallButtonText, { color: colors.background }]}>
+                        {refreshingId === item.id ? '検索中' : '所持に追加'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                )}
                 {isOwnedBook(item) && editingId === item.id && (
                   <View style={styles.editBox}>
                     <TextInput

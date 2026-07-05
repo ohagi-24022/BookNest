@@ -1,20 +1,19 @@
 const VOLUME_PATTERNS = [
-  /(?:^|[\s　:：-])(?:第)?([0-9０-９]{1,3})\s*(?:巻|巻目|volume|vol\.?|#)/i,
-  /(?:第)?([0-9]{1,3})\s*(?:巻|巻目|volume|vol\.?|#)/i,
-  /([0-9０-９]{1,3})\s*(?=[（(【「『〈<])/,
-  /(?:\(|（|〈|<)\s*([0-9０-９]{1,3})\s*(?:\)|）|〉|>)/,
-  /(?:^|[\s　])([0-9０-９]{1,3})\s+(?=\S)/,
-  /(?:^|[\s　])([0-9０-９]{1,3})$/,
+  /(?:^|[\s:：\-–—])(?:第\s*)?([0-9]{1,3})\s*(?:巻(?:目)?|volume|vol\.?|#)(?=$|[\s(（【「『〈<])/i,
+  /(?:第\s*)?([0-9]{1,3})\s*(?:巻(?:目)?)(?=$|[\s(（【「『〈<])/i,
+  /(?:^|[\s:：\-–—])(?:第\s*|volume\s*|vol\.?\s*|#\s*)([0-9]{1,3})(?=$|[\s(（【「『〈<])/i,
+  /(?:\(|（|【|「|『|〈|<)\s*(?:第\s*)?([0-9]{1,3})\s*(?:巻)?\s*(?:\)|）|】|」|』|〉|>)/,
+  /([0-9]{1,3})\s*(?=[(（【「『〈<])/,
+  /(?:^|[\s:：\-–—])([0-9]{1,3})\s*(?=[(（【「『〈<])/,
+  /(?:^|[\s:：\-–—])([0-9]{1,3})\s+(?=\S)/,
+  /(?:^|[\s:：\-–—])([0-9]{1,3})$/,
 ];
 
-function toHalfWidthNumber(value: string) {
-  return value.replace(/[０-９]/g, (character) =>
-    String.fromCharCode(character.charCodeAt(0) - 0xfee0),
-  );
-}
+const EDITION_SUFFIX_PATTERN =
+  /(?:モノクロ版|カラー版|デジタル版|電子版|ジャンプコミックスDIGITAL|ジャンプコミックス|コミックス?|漫画|マンガ|文庫版?|新装版|完全版|愛蔵版|特装版|限定版)\s*$/i;
 
 export function parseSeriesTitle(title: string) {
-  const normalized = title.replace(/\s+/g, ' ').trim();
+  const normalized = title.normalize('NFKC').replace(/\s+/g, ' ').trim();
   let volumeNumber: number | undefined;
   let seriesTitle = normalized;
 
@@ -22,23 +21,21 @@ export function parseSeriesTitle(title: string) {
     const match = normalized.match(pattern);
     if (!match?.[1]) continue;
 
-    volumeNumber = Number.parseInt(toHalfWidthNumber(match[1]), 10);
+    volumeNumber = Number.parseInt(match[1], 10);
     const beforeVolume = normalized.slice(0, match.index).trim();
     const afterVolume = normalized.slice((match.index ?? 0) + match[0].length).trim();
-    seriesTitle = beforeVolume && afterVolume ? beforeVolume : normalized.replace(match[0], '').trim();
+    seriesTitle = beforeVolume || afterVolume || normalized.replace(match[0], '').trim();
     break;
   }
 
   seriesTitle = seriesTitle
-    .replace(/[（(【「『〈<].*?[）)】」』〉>]\s*$/g, '')
-    .replace(/(?:第)?[0-9０-９]{1,3}\s*巻$/, '')
-    .replace(/[0-9０-９]{1,3}\s*$/, '')
-    .replace(/[\[(（【]\s*(?:第)?[0-9０-９]{1,3}\s*(?:巻)?\s*[\]）)】]/g, '')
-    .replace(
-      /(?:モノクロ版|カラー版|デジタル版|電子版|ジャンプコミックスDIGITAL|ジャンプコミックス|コミック|漫画|マンガ|文庫|新装版|完全版|愛蔵版)\s*$/g,
-      '',
-    )
-    .replace(/\s+-\s+.*$/, '')
+    .replace(/[(（【「『〈<].*?[)）】」』〉>]\s*$/g, '')
+    .replace(/(?:第\s*)?[0-9]{1,3}\s*巻(?:目)?$/, '')
+    .replace(/[0-9]{1,3}\s*$/, '')
+    .replace(/[\[(（【]\s*(?:第\s*)?[0-9]{1,3}\s*(?:巻)?\s*[\]）)】]/g, '')
+    .replace(EDITION_SUFFIX_PATTERN, '')
+    .replace(/\s+[-–—]\s+.*$/, '')
+    .replace(/[,:：\-–—]\s*$/, '')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -46,6 +43,15 @@ export function parseSeriesTitle(title: string) {
     seriesTitle: seriesTitle || normalized,
     volumeNumber: Number.isFinite(volumeNumber) ? volumeNumber : undefined,
   };
+}
+
+export function normalizeSeriesKey(seriesTitle: string) {
+  return parseSeriesTitle(seriesTitle).seriesTitle
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(EDITION_SUFFIX_PATTERN, '')
+    .replace(/[\s・･:：\-–—_'"“”‘’()[\]{}「」『』【】〈〉《》]/g, '')
+    .trim();
 }
 
 export function getMissingVolumes(volumes: number[]) {

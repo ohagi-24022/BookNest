@@ -1,6 +1,6 @@
 import { BookInput } from '../types';
 import { env } from './env';
-import { parseSeriesTitle } from './series';
+import { normalizeSeriesKey, parseSeriesTitle } from './series';
 import { supabase } from './supabase';
 
 type GoogleBooksResponse = {
@@ -94,6 +94,12 @@ export type BookLookupDebugEntry = {
   volumeNumber?: number;
   coverUrl?: string;
   reason?: string;
+};
+
+export type SeriesPublicationInfo = {
+  latestVolume: number;
+  source: 'Rakuten Books' | 'Google Books';
+  checkedAt: string;
 };
 
 function normalizeIsbn(isbn: string) {
@@ -421,6 +427,100 @@ async function lookupRakutenBooksTotal(keyword: string, expected?: ExpectedBook)
   if (!item?.title) return null;
 
   return rakutenItemToBookInput(item);
+}
+
+function findLatestVolumeFromTitles(titles: Array<string | undefined>, seriesTitle: string) {
+  const expectedKey = normalizeSeriesKey(seriesTitle);
+  const volumes = titles
+    .map((title) => (title ? parseSeriesTitle(title) : null))
+    .filter(
+      (
+        parsed,
+      ): parsed is {
+        seriesTitle: string;
+        volumeNumber: number;
+      } =>
+        !!parsed?.volumeNumber &&
+        parsed.volumeNumber > 0 &&
+        parsed.volumeNumber <= 500 &&
+        normalizeSeriesKey(parsed.seriesTitle) === expectedKey,
+    )
+    .map((parsed) => parsed.volumeNumber);
+
+  return volumes.length > 0 ? Math.max(...volumes) : null;
+}
+
+async function lookupLatestRakutenSeriesVolume(seriesTitle: string) {
+  if (!env.rakutenAppId || !env.rakutenAccessKey) return null;
+
+  const searchParams = new URLSearchParams({
+    applicationId: env.rakutenAppId,
+    accessKey: env.rakutenAccessKey,
+    format: 'json',
+    title: seriesTitle,
+    hits: '30',
+    sort: '-releaseDate',
+    outOfStockFlag: '1',
+    size: '9',
+  });
+  const path = 'BooksBook/Search/20170404';
+  const response = await fetchRakutenWithTimeout(
+    `https://openapi.rakuten.co.jp/services/api/${path}?${searchParams.toString()}`,
+    { path, params: Object.fromEntries(searchParams.entries()) },
+  );
+  if (!response.ok) return null;
+
+  const payload = (await response.json()) as RakutenBooksResponse;
+  return findLatestVolumeFromTitles(
+    payload.Items?.map((entry) => entry.Item?.title) ?? [],
+    seriesTitle,
+  );
+}
+
+async function lookupLatestGoogleSeriesVolume(seriesTitle: string) {
+  const params = new URLSearchParams({
+    q: `intitle:${seriesTitle}`,
+    maxResults: '40',
+    orderBy: 'newest',
+    printType: 'books',
+  });
+  if (env.googleBooksApiKey) params.set('key', env.googleBooksApiKey);
+
+  const response = await fetchWithTimeout(
+    `https://www.googleapis.com/books/v1/volumes?${params.toString()}`,
+  );
+  if (!response.ok) return null;
+
+  const payload = (await response.json()) as GoogleBooksResponse;
+  return findLatestVolumeFromTitles(
+    payload.items?.map((item) => item.volumeInfo?.title) ?? [],
+    seriesTitle,
+  );
+}
+
+export async function lookupLatestSeriesPublication(
+  seriesTitle: string,
+): Promise<SeriesPublicationInfo | null> {
+  const normalizedTitle = seriesTitle.trim();
+  if (!normalizedTitle) return null;
+
+  const rakutenVolume = await lookupLatestRakutenSeriesVolume(normalizedTitle);
+  if (rakutenVolume) {
+    return {
+      latestVolume: rakutenVolume,
+      source: 'Rakuten Books',
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  const googleVolume = await lookupLatestGoogleSeriesVolume(normalizedTitle);
+  if (!googleVolume) return null;
+
+  return {
+    latestVolume: googleVolume,
+    source: 'Google Books',
+    checkedAt: new Date().toISOString(),
+  };
 }
 
 async function lookupGoogleBooks(isbn: string): Promise<BookInput | null> {
