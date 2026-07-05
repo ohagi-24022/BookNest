@@ -1,3 +1,4 @@
+import { useScrollToTop } from '@react-navigation/native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
@@ -37,6 +38,11 @@ function normalizeBarcode(data: string) {
 
 export default function ScanScreen() {
   const router = useRouter();
+  const scrollRef = useRef<ScrollView>(null);
+  const tabScrollToTopRef = useRef({
+    scrollToTop: () => scrollRef.current?.scrollTo({ y: 0, animated: true }),
+  });
+  useScrollToTop(tabScrollToTopRef);
   const [permission, requestPermission] = useCameraPermissions();
   const { addBook, findDuplicateBook } = useLibrary();
   const { colors } = useAppTheme();
@@ -298,7 +304,7 @@ export default function ScanScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={[styles.screen, { backgroundColor: colors.background }]}
     >
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
         {!showConfirmation && <View style={styles.cameraShell}>
           {permission?.granted ? (
             <CameraView

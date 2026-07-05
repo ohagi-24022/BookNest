@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useScrollToTop } from '@react-navigation/native';
 import { Link } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -28,8 +29,9 @@ import { useLibrary } from '../../src/store/LibraryContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 import { Book, ReadingStatus } from '../../src/types';
 
-type HomeFilter = ReadingStatus | 'all' | 'missing';
-type SeriesSort = 'title' | 'recent' | 'missing' | 'unread' | 'completion';
+type HomeFilter = ReadingStatus | 'all' | 'missing' | 'favorite';
+type SeriesSort = 'title' | 'recent' | 'missing' | 'unread' | 'completion' | 'favorite';
+type BookSort = 'recent' | 'title' | 'series' | 'volume' | 'status' | 'favorite';
 type SeriesPublicationCache = Record<string, SeriesPublicationInfo>;
 
 const SERIES_PUBLICATION_STORAGE_KEY = 'booknest.series-publication.v1';
@@ -40,6 +42,7 @@ const filters: Array<{ label: string; value: HomeFilter }> = [
   { label: '読書中', value: 'reading' },
   { label: '読了', value: 'read' },
   { label: '巻抜け', value: 'missing' },
+  { label: 'お気に入り', value: 'favorite' },
 ];
 
 const seriesSortOptions: Array<{ label: string; value: SeriesSort }> = [
@@ -48,25 +51,55 @@ const seriesSortOptions: Array<{ label: string; value: SeriesSort }> = [
   { label: '巻抜け優先', value: 'missing' },
   { label: '積読優先', value: 'unread' },
   { label: '所持率順', value: 'completion' },
+  { label: 'お気に入り優先', value: 'favorite' },
 ];
+
+const bookSortOptions: Array<{ label: string; value: BookSort }> = [
+  { label: '最近追加', value: 'recent' },
+  { label: 'タイトル順', value: 'title' },
+  { label: 'シリーズ順', value: 'series' },
+  { label: '巻数順', value: 'volume' },
+  { label: '読書状態順', value: 'status' },
+  { label: 'お気に入り優先', value: 'favorite' },
+];
+
+const readingStatusOrder: Record<ReadingStatus, number> = {
+  reading: 0,
+  unread: 1,
+  read: 2,
+};
 
 export default function HomeScreen() {
   const { colors } = useAppTheme();
-  const { showPublishedLatestVolume } = useAppSettings();
+  const {
+    favoriteSeriesKeys,
+    showPublishedLatestVolume,
+    toggleFavoriteSeries,
+  } = useAppSettings();
   const { books, error, loading, requiresAuth, seriesGroups } = useLibrary();
   const [filter, setFilter] = useState<HomeFilter>('all');
   const [viewMode, setViewMode] = useState<'series' | 'books'>('series');
   const [seriesSort, setSeriesSort] = useState<SeriesSort>('title');
+  const [bookSort, setBookSort] = useState<BookSort>('recent');
   const [query, setQuery] = useState('');
   const [openMenu, setOpenMenu] = useState<'filter' | 'sort' | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(152);
   const [publicationCache, setPublicationCache] = useState<SeriesPublicationCache>({});
   const [refreshingSeriesTitle, setRefreshingSeriesTitle] = useState<string | null>(null);
   const toolbarTranslateY = useRef(new Animated.Value(0)).current;
+  const seriesScrollRef = useRef<ScrollView>(null);
+  const booksListRef = useRef<FlatList<Book>>(null);
+  const activeViewModeRef = useRef(viewMode);
+  const tabScrollToTopRef = useRef({ scrollToTop: () => {} });
   const toolbarVisibleRef = useRef(true);
   const lastScrollYRef = useRef(0);
   const directionDistanceRef = useRef(0);
   const lastDirectionRef = useRef<1 | -1>(1);
+  const favoriteSeriesKeySet = useMemo(
+    () => new Set(favoriteSeriesKeys),
+    [favoriteSeriesKeys],
+  );
+  activeViewModeRef.current = viewMode;
 
   useEffect(() => {
     AsyncStorage.getItem(SERIES_PUBLICATION_STORAGE_KEY)
@@ -107,7 +140,8 @@ export default function HomeScreen() {
         (filter === 'unread' && group.unreadCount > 0) ||
         (filter === 'reading' && group.readingCount > 0) ||
         (filter === 'read' && group.readCount === group.ownedCount) ||
-        (filter === 'missing' && (stats?.missingVolumes.length ?? 0) > 0);
+        (filter === 'missing' && (stats?.missingVolumes.length ?? 0) > 0) ||
+        (filter === 'favorite' && favoriteSeriesKeySet.has(normalizeSeriesKey(group.title)));
       const matchesQuery = group.title.toLowerCase().includes(query.toLowerCase());
       return matchesFilter && matchesQuery;
     });
@@ -131,33 +165,72 @@ export default function HomeScreen() {
           left.title.localeCompare(right.title)
         );
       }
+      if (seriesSort === 'favorite') {
+        const favoriteDifference =
+          Number(favoriteSeriesKeySet.has(normalizeSeriesKey(right.title))) -
+          Number(favoriteSeriesKeySet.has(normalizeSeriesKey(left.title)));
+        return favoriteDifference || left.title.localeCompare(right.title);
+      }
       return left.title.localeCompare(right.title);
     });
-  }, [filter, query, seriesGroups, seriesSort, seriesStats]);
-  const visibleBooks = useMemo(
-    () =>
-      books.filter((book) => {
+  }, [favoriteSeriesKeySet, filter, query, seriesGroups, seriesSort, seriesStats]);
+  const visibleBooks = useMemo(() => {
+    const filtered = books.filter((book) => {
         const matchesFilter =
           filter === 'all' ||
           (filter === 'missing'
             ? (seriesStats.get(book.seriesTitle)?.missingVolumes.length ?? 0) > 0
-            : book.status === filter);
+            : filter === 'favorite'
+              ? favoriteSeriesKeySet.has(normalizeSeriesKey(book.seriesTitle))
+              : book.status === filter);
         const keyword = query.toLowerCase();
         const matchesQuery =
           book.title.toLowerCase().includes(keyword) ||
           book.seriesTitle.toLowerCase().includes(keyword) ||
           (book.author?.toLowerCase().includes(keyword) ?? false);
         return matchesFilter && matchesQuery;
-      }),
-    [books, filter, query, seriesStats],
-  );
+      });
+
+    return filtered.sort((left, right) => {
+      if (bookSort === 'title') return left.title.localeCompare(right.title);
+      if (bookSort === 'series') {
+        return (
+          left.seriesTitle.localeCompare(right.seriesTitle) ||
+          (left.volumeNumber ?? Number.MAX_SAFE_INTEGER) -
+            (right.volumeNumber ?? Number.MAX_SAFE_INTEGER)
+        );
+      }
+      if (bookSort === 'volume') {
+        return (
+          (left.volumeNumber ?? Number.MAX_SAFE_INTEGER) -
+            (right.volumeNumber ?? Number.MAX_SAFE_INTEGER) ||
+          left.seriesTitle.localeCompare(right.seriesTitle)
+        );
+      }
+      if (bookSort === 'status') {
+        return (
+          readingStatusOrder[left.status] - readingStatusOrder[right.status] ||
+          left.title.localeCompare(right.title)
+        );
+      }
+      if (bookSort === 'favorite') {
+        const favoriteDifference =
+          Number(favoriteSeriesKeySet.has(normalizeSeriesKey(right.seriesTitle))) -
+          Number(favoriteSeriesKeySet.has(normalizeSeriesKey(left.seriesTitle)));
+        return favoriteDifference || right.createdAt.localeCompare(left.createdAt);
+      }
+      return right.createdAt.localeCompare(left.createdAt);
+    });
+  }, [bookSort, books, favoriteSeriesKeySet, filter, query, seriesStats]);
   const renderCover = (book: Book) => (
     <BookCover thumbnailUrl={book.thumbnailUrl} isbn={book.isbn} style={styles.cover} />
   );
   const listVersion = `${books.length}-${seriesGroups.length}-${filter}-${query}`;
   const selectedFilterLabel = filters.find((option) => option.value === filter)?.label ?? 'すべて';
   const selectedSortLabel =
-    seriesSortOptions.find((option) => option.value === seriesSort)?.label ?? '名前順';
+    viewMode === 'series'
+      ? seriesSortOptions.find((option) => option.value === seriesSort)?.label ?? '名前順'
+      : bookSortOptions.find((option) => option.value === bookSort)?.label ?? '最近追加';
 
   const setToolbarVisible = useCallback(
     (visible: boolean) => {
@@ -171,6 +244,18 @@ export default function HomeScreen() {
     },
     [toolbarHeight, toolbarTranslateY],
   );
+
+  tabScrollToTopRef.current.scrollToTop = () => {
+    setToolbarVisible(true);
+    lastScrollYRef.current = 0;
+    directionDistanceRef.current = 0;
+    if (activeViewModeRef.current === 'series') {
+      seriesScrollRef.current?.scrollTo({ y: 0, animated: true });
+    } else {
+      booksListRef.current?.scrollToOffset({ offset: 0, animated: true });
+    }
+  };
+  useScrollToTop(tabScrollToTopRef);
 
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -324,23 +409,22 @@ export default function HomeScreen() {
             </Text>
             <Text style={[styles.menuChevron, { color: colors.muted }]}>▼</Text>
           </Pressable>
-          {viewMode === 'series' && (
-            <Pressable
-              onPress={() => setOpenMenu('sort')}
-              style={[styles.menuButton, { borderColor: colors.border }]}
-            >
-              <Text numberOfLines={1} style={[styles.menuButtonText, { color: colors.text }]}>
-                並び: {selectedSortLabel}
-              </Text>
-              <Text style={[styles.menuChevron, { color: colors.muted }]}>▼</Text>
-            </Pressable>
-          )}
+          <Pressable
+            onPress={() => setOpenMenu('sort')}
+            style={[styles.menuButton, { borderColor: colors.border }]}
+          >
+            <Text numberOfLines={1} style={[styles.menuButtonText, { color: colors.text }]}>
+              並び: {selectedSortLabel}
+            </Text>
+            <Text style={[styles.menuChevron, { color: colors.muted }]}>▼</Text>
+          </Pressable>
         </View>
       </Animated.View>
 
       {viewMode === 'series' ? (
         <ScrollView
           key={`series-grid-${listVersion}`}
+          ref={seriesScrollRef}
           style={styles.list}
           contentContainerStyle={[styles.grid, { paddingTop: listTopPadding }]}
           showsVerticalScrollIndicator={false}
@@ -356,24 +440,54 @@ export default function HomeScreen() {
                     <Text numberOfLines={2} style={[styles.seriesTitle, { color: colors.text }]}>
                       {item.title}
                     </Text>
-                    {showPublishedLatestVolume && (
+                    <View style={styles.seriesActions}>
                       <Pressable
-                        disabled={refreshingSeriesTitle !== null}
                         onPress={(event) => {
                           event.stopPropagation();
-                          void refreshSeriesPublication(item.title, item.latestVolume);
+                          toggleFavoriteSeries(item.title);
                         }}
                         style={[
-                          styles.refreshButton,
+                          styles.favoriteButton,
                           { borderColor: colors.border },
-                          refreshingSeriesTitle !== null && styles.refreshButtonDisabled,
                         ]}
+                        accessibilityLabel={
+                          favoriteSeriesKeySet.has(normalizeSeriesKey(item.title))
+                            ? `${item.title}のお気に入りを解除`
+                            : `${item.title}をお気に入りに追加`
+                        }
                       >
-                        <Text style={[styles.refreshButtonText, { color: colors.text }]}>
-                          {refreshingSeriesTitle === item.title ? '更新中' : '更新'}
+                        <Text
+                          style={[
+                            styles.favoriteButtonText,
+                            {
+                              color: favoriteSeriesKeySet.has(normalizeSeriesKey(item.title))
+                                ? '#c58b00'
+                                : colors.muted,
+                            },
+                          ]}
+                        >
+                          {favoriteSeriesKeySet.has(normalizeSeriesKey(item.title)) ? '★' : '☆'}
                         </Text>
                       </Pressable>
-                    )}
+                      {showPublishedLatestVolume && (
+                        <Pressable
+                          disabled={refreshingSeriesTitle !== null}
+                          onPress={(event) => {
+                            event.stopPropagation();
+                            void refreshSeriesPublication(item.title, item.latestVolume);
+                          }}
+                          style={[
+                            styles.refreshButton,
+                            { borderColor: colors.border },
+                            refreshingSeriesTitle !== null && styles.refreshButtonDisabled,
+                          ]}
+                        >
+                          <Text style={[styles.refreshButtonText, { color: colors.text }]}>
+                            {refreshingSeriesTitle === item.title ? '更新中' : '更新'}
+                          </Text>
+                        </Pressable>
+                      )}
+                    </View>
                   </View>
                   <Text style={[styles.meta, { color: colors.muted }]}>
                     {item.ownedCount} 冊所持
@@ -428,6 +542,7 @@ export default function HomeScreen() {
       ) : (
         <FlatList
           key="books-list"
+          ref={booksListRef}
           style={styles.list}
           data={visibleBooks}
           extraData={listVersion}
@@ -475,15 +590,28 @@ export default function HomeScreen() {
             <Text style={[styles.optionTitle, { color: colors.text }]}>
               {openMenu === 'sort' ? '並び替え' : '表示条件'}
             </Text>
-            {(openMenu === 'sort' ? seriesSortOptions : filters).map((option) => {
+            {(openMenu === 'sort'
+              ? viewMode === 'series'
+                ? seriesSortOptions
+                : bookSortOptions
+              : filters
+            ).map((option) => {
               const selected =
-                openMenu === 'sort' ? option.value === seriesSort : option.value === filter;
+                openMenu === 'sort'
+                  ? viewMode === 'series'
+                    ? option.value === seriesSort
+                    : option.value === bookSort
+                  : option.value === filter;
               return (
                 <Pressable
                   key={option.value}
                   onPress={() => {
                     if (openMenu === 'sort') {
-                      setSeriesSort(option.value as SeriesSort);
+                      if (viewMode === 'series') {
+                        setSeriesSort(option.value as SeriesSort);
+                      } else {
+                        setBookSort(option.value as BookSort);
+                      }
                     } else {
                       setFilter(option.value as HomeFilter);
                     }
@@ -590,12 +718,22 @@ const styles = StyleSheet.create({
   },
   seriesRowBody: { flex: 1 },
   seriesHeadingRow: { alignItems: 'flex-start', flexDirection: 'row', gap: 8 },
+  seriesActions: { alignItems: 'center', flexDirection: 'row', gap: 6 },
   cover: { backgroundColor: '#e5e5e5', borderRadius: 4, height: 120, width: 82 },
   coverFallback: { alignItems: 'center', justifyContent: 'center' },
   coverFallbackText: { color: '#777777', fontSize: 12, fontWeight: '800' },
   rowCover: { backgroundColor: '#e5e5e5', borderRadius: 4, height: 96, width: 66 },
   cardBody: { minHeight: 100, padding: 10 },
   seriesTitle: { flex: 1, fontSize: 15, fontWeight: '800', lineHeight: 19 },
+  favoriteButton: {
+    alignItems: 'center',
+    borderRadius: 6,
+    borderWidth: 1,
+    height: 30,
+    justifyContent: 'center',
+    width: 34,
+  },
+  favoriteButtonText: { fontSize: 18, lineHeight: 21 },
   refreshButton: {
     alignItems: 'center',
     borderRadius: 6,

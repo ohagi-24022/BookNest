@@ -35,7 +35,11 @@ export default function SeriesScreen() {
   const seriesTitle = decodeURIComponent(params.title ?? '');
   const { addBook, getSeriesItems, bulkUpdateStatus, updateBook, deleteBook, repairBookMetadata } =
     useLibrary();
-  const { openExternalPurchaseLinks } = useAppSettings();
+  const {
+    isFavoriteSeries,
+    openExternalPurchaseLinks,
+    toggleFavoriteSeries,
+  } = useAppSettings();
   const { colors } = useAppTheme();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -45,10 +49,25 @@ export default function SeriesScreen() {
 
   const items = useMemo(() => getSeriesItems(seriesTitle), [getSeriesItems, seriesTitle]);
   const selectedCount = selectedIds.length;
+  const favorite = isFavoriteSeries(seriesTitle);
 
   useLayoutEffect(() => {
-    navigation.setOptions({ title: seriesTitle });
-  }, [navigation, seriesTitle]);
+    navigation.setOptions({
+      title: seriesTitle,
+      headerRight: () => (
+        <Pressable
+          accessibilityLabel={favorite ? 'お気に入りを解除' : 'お気に入りに追加'}
+          hitSlop={10}
+          onPress={() => toggleFavoriteSeries(seriesTitle)}
+          style={styles.headerFavoriteButton}
+        >
+          <Text style={[styles.headerFavoriteText, { color: favorite ? '#c58b00' : colors.muted }]}>
+            {favorite ? '★' : '☆'}
+          </Text>
+        </Pressable>
+      ),
+    });
+  }, [colors.muted, favorite, navigation, seriesTitle, toggleFavoriteSeries]);
 
   const toggleSelected = (item: ShelfItem) => {
     if (!isOwnedBook(item)) {
@@ -383,4 +402,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   smallButtonText: { fontSize: 12, fontWeight: '800' },
+  headerFavoriteButton: {
+    alignItems: 'center',
+    height: 36,
+    justifyContent: 'center',
+    width: 40,
+  },
+  headerFavoriteText: { fontSize: 22, lineHeight: 26 },
 });

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useScrollToTop } from '@react-navigation/native';
+import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -24,6 +25,11 @@ const themeOptions: Array<{ label: string; value: ThemeMode }> = [
 ];
 
 export default function SettingsScreen() {
+  const scrollRef = useRef<ScrollView>(null);
+  const tabScrollToTopRef = useRef({
+    scrollToTop: () => scrollRef.current?.scrollTo({ y: 0, animated: true }),
+  });
+  useScrollToTop(tabScrollToTopRef);
   const { configured, initializing, user, signIn, signOut, signUp } = useAuth();
   const { localImportCount, migrateLocalBooks } = useLibrary();
   const {
@@ -84,7 +90,11 @@ export default function SettingsScreen() {
   };
 
   return (
-    <ScrollView style={[styles.screen, { backgroundColor: colors.background }]} contentContainerStyle={styles.content}>
+    <ScrollView
+      ref={scrollRef}
+      style={[styles.screen, { backgroundColor: colors.background }]}
+      contentContainerStyle={styles.content}
+    >
       <View style={[styles.section, { borderBottomColor: colors.border }]}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>アカウント</Text>
         {initializing ? (
