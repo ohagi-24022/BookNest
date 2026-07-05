@@ -1,3 +1,4 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Tabs } from 'expo-router';
 import { Platform } from 'react-native';
 
@@ -23,19 +24,40 @@ export default function TabLayout() {
         tabBarLabelStyle: { fontSize: 12, fontWeight: '700' },
       }}
     >
-      <Tabs.Screen name="index" options={{ title: '本棚', tabBarLabel: '本棚' }} />
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: '本棚',
+          tabBarLabel: '本棚',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons color={color} name={focused ? 'library' : 'library-outline'} size={24} />
+          ),
+        }}
+      />
       <Tabs.Screen
         name="scan"
         options={{
           title: 'スキャン',
           tabBarLabel: '登録',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons color={color} name={focused ? 'barcode' : 'barcode-outline'} size={27} />
+          ),
           tabBarItemStyle: {
             marginTop: -10,
             borderRadius: 24,
           },
         }}
       />
-      <Tabs.Screen name="settings" options={{ title: '設定', tabBarLabel: '設定' }} />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: '設定',
+          tabBarLabel: '設定',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons color={color} name={focused ? 'settings' : 'settings-outline'} size={24} />
+          ),
+        }}
+      />
     </Tabs>
   );
 }
