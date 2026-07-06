@@ -59,6 +59,7 @@ export default function ScanScreen() {
 
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
+  const [publisher, setPublisher] = useState('');
   const [seriesTitle, setSeriesTitle] = useState('');
   const [volumeNumber, setVolumeNumber] = useState('');
   const [isbn, setIsbn] = useState('');
@@ -77,6 +78,7 @@ export default function ScanScreen() {
 
     setTitle(bookInput.title);
     setAuthor(bookInput.author ?? '');
+    setPublisher(bookInput.publisher ?? '');
     setSeriesTitle(bookInput.seriesTitle);
     setVolumeNumber(bookInput.volumeNumber ? String(bookInput.volumeNumber) : '');
     setIsbn(bookInput.isbn ?? '');
@@ -89,6 +91,7 @@ export default function ScanScreen() {
     isbn: isbn.trim() || undefined,
     title: title.trim(),
     author: author.trim() || undefined,
+    publisher: publisher.trim() || undefined,
     seriesTitle: seriesTitle.trim(),
     volumeNumber: volumeNumber ? Number.parseInt(volumeNumber, 10) : undefined,
     thumbnailUrl: thumbnailUrl || undefined,
@@ -98,6 +101,7 @@ export default function ScanScreen() {
   const resetForm = () => {
     setTitle('');
     setAuthor('');
+    setPublisher('');
     setSeriesTitle('');
     setVolumeNumber('');
     setIsbn('');
@@ -375,6 +379,9 @@ export default function ScanScreen() {
                 {volumeNumber ? ` / ${volumeNumber}巻` : ' / 巻数なし'}
               </Text>
               {!!author && <Text style={[styles.confirmationMeta, { color: colors.muted }]}>{author}</Text>}
+              {!!publisher && (
+                <Text style={[styles.confirmationMeta, { color: colors.muted }]}>{publisher}</Text>
+              )}
               {!!isbn && <Text style={[styles.confirmationIsbn, { color: colors.muted }]}>ISBN {isbn}</Text>}
               <View style={styles.confirmationActions}>
                 <Pressable
@@ -443,6 +450,13 @@ export default function ScanScreen() {
             value={author}
             onChangeText={setAuthor}
             placeholder="著者"
+            placeholderTextColor={colors.muted}
+            style={[styles.input, { backgroundColor: colors.input, color: colors.text }]}
+          />
+          <TextInput
+            value={publisher}
+            onChangeText={setPublisher}
+            placeholder="出版社"
             placeholderTextColor={colors.muted}
             style={[styles.input, { backgroundColor: colors.input, color: colors.text }]}
           />

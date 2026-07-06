@@ -1,4 +1,5 @@
-import { BookInput } from '../types';
+import { Book, BookInput } from '../types';
+import { normalizeAuthor } from './bookMetadata';
 import { env } from './env';
 import { normalizeSeriesKey, parseSeriesTitle } from './series';
 import { supabase } from './supabase';
@@ -8,10 +9,15 @@ type GoogleBooksResponse = {
     id?: string;
     volumeInfo?: {
       title?: string;
+      subtitle?: string;
       authors?: string[];
+      publisher?: string;
+      description?: string;
       imageLinks?: {
         thumbnail?: string;
         smallThumbnail?: string;
+        medium?: string;
+        large?: string;
       };
       industryIdentifiers?: Array<{
         type?: string;
@@ -26,9 +32,17 @@ type OpenBdResponse = Array<{
     isbn?: string;
     title?: string;
     author?: string;
+    publisher?: string;
     cover?: string;
   };
   onix?: {
+    CollateralDetail?: {
+      TextContent?: Array<{
+        TextType?: string;
+        ContentAudience?: string;
+        Text?: string;
+      }>;
+    };
     DescriptiveDetail?: {
       Collection?: {
         TitleDetail?: {
@@ -47,7 +61,10 @@ type RakutenBooksResponse = {
   Items?: Array<{
     Item?: {
       title?: string;
+      subTitle?: string;
       author?: string;
+      publisherName?: string;
+      itemCaption?: string;
       isbn?: string;
       largeImageUrl?: string;
       mediumImageUrl?: string;
@@ -102,6 +119,17 @@ export type SeriesPublicationInfo = {
   checkedAt: string;
 };
 
+export type BookVolumeDetails = {
+  title?: string;
+  subtitle?: string;
+  author?: string;
+  publisher?: string;
+  description?: string;
+  thumbnailUrl?: string;
+  source: 'Google Books' | 'OpenBD' | 'Rakuten Books';
+  checkedAt: string;
+};
+
 function normalizeIsbn(isbn: string) {
   return isbn.replace(/[^0-9X]/gi, '').toUpperCase();
 }
@@ -151,7 +179,8 @@ function mergeBookMetadata(primary: BookInput, fallback: BookInput | null): Book
     ...primary,
     seriesTitle: primary.seriesTitle || fallback.seriesTitle,
     volumeNumber: primary.volumeNumber ?? fallback.volumeNumber,
-    author: primary.author ?? fallback.author,
+    author: normalizeAuthor(primary.author ?? fallback.author),
+    publisher: primary.publisher ?? fallback.publisher,
     thumbnailUrl: primary.thumbnailUrl ?? fallback.thumbnailUrl,
   };
 }
@@ -219,7 +248,8 @@ function rakutenItemToBookInput(item: RakutenItem, fallbackIsbn?: string): BookI
     title: item.title ?? '',
     seriesTitle: parsed.seriesTitle,
     volumeNumber: parsed.volumeNumber,
-    author: item.author,
+    author: normalizeAuthor(item.author),
+    publisher: item.publisherName,
     thumbnailUrl: firstCoverUrl(item.largeImageUrl, item.mediumImageUrl, item.smallImageUrl),
     status: 'unread',
   };
@@ -361,7 +391,8 @@ async function lookupOpenBd(isbn: string): Promise<BookInput | null> {
     title,
     seriesTitle: collectionTitle ?? parsed.seriesTitle,
     volumeNumber: parsed.volumeNumber,
-    author: item.summary?.author,
+    author: normalizeAuthor(item.summary?.author),
+    publisher: item.summary?.publisher,
     thumbnailUrl: normalizeImageUrl(item.summary?.cover),
     status: 'unread',
   };
@@ -589,10 +620,214 @@ async function lookupGoogleBooksByQuery(
     title: volume.title,
     seriesTitle: parsed.seriesTitle,
     volumeNumber: parsed.volumeNumber,
-    author: volume.authors?.join(', '),
+    author: normalizeAuthor(volume.authors?.join(', ')),
+    publisher: volume.publisher,
     thumbnailUrl: fallbackCoverUrl,
     status: 'unread',
   };
+}
+
+function plainTextDescription(value?: string) {
+  if (!value) return undefined;
+
+  const decoded = value
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return decoded || undefined;
+}
+
+function mergeVolumeDetails(
+  primary: BookVolumeDetails | null,
+  fallback: BookVolumeDetails | null,
+) {
+  if (!primary) return fallback;
+  if (!fallback) return primary;
+
+  return {
+    ...primary,
+    title: primary.title ?? fallback.title,
+    subtitle: primary.subtitle ?? fallback.subtitle,
+    author: primary.author ?? fallback.author,
+    publisher: primary.publisher ?? fallback.publisher,
+    description: primary.description ?? fallback.description,
+    thumbnailUrl: primary.thumbnailUrl ?? fallback.thumbnailUrl,
+    source: primary.description ? primary.source : fallback.source,
+  };
+}
+
+async function lookupGoogleBookVolumeDetails(
+  book: Pick<Book, 'isbn' | 'title' | 'seriesTitle' | 'volumeNumber'>,
+): Promise<BookVolumeDetails | null> {
+  const normalizedIsbn = book.isbn ? normalizeIsbn(book.isbn) : '';
+  const params = new URLSearchParams({
+    q: normalizedIsbn ? `isbn:${normalizedIsbn}` : `intitle:${book.title}`,
+    maxResults: '10',
+    printType: 'books',
+  });
+  if (env.googleBooksApiKey) params.set('key', env.googleBooksApiKey);
+
+  const response = await fetchWithTimeout(
+    `https://www.googleapis.com/books/v1/volumes?${params.toString()}`,
+  );
+  if (!response.ok) return null;
+
+  const payload = (await response.json()) as GoogleBooksResponse;
+  const isbnMatch = normalizedIsbn
+    ? payload.items?.find((item) =>
+        hasMatchingIndustryIdentifier(item.volumeInfo?.industryIdentifiers, normalizedIsbn),
+      )
+    : undefined;
+  const volumeMatch = payload.items?.find((item) => {
+    if (!book.volumeNumber || !item.volumeInfo?.title) return false;
+    const parsed = parseSeriesTitle(item.volumeInfo.title);
+    return (
+      parsed.volumeNumber === book.volumeNumber &&
+      isSameSeriesTitle(parsed.seriesTitle, book.seriesTitle)
+    );
+  });
+  const volume = (isbnMatch ?? volumeMatch ?? payload.items?.[0])?.volumeInfo;
+  if (!volume?.title) return null;
+
+  return {
+    title: volume.title,
+    subtitle: volume.subtitle,
+    author: normalizeAuthor(volume.authors?.join(', ')),
+    publisher: volume.publisher,
+    description: plainTextDescription(volume.description),
+    thumbnailUrl: firstCoverUrl(
+      volume.imageLinks?.large,
+      volume.imageLinks?.medium,
+      volume.imageLinks?.thumbnail,
+      volume.imageLinks?.smallThumbnail,
+    ),
+    source: 'Google Books',
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+async function lookupOpenBdVolumeDetails(
+  book: Pick<Book, 'isbn'>,
+): Promise<BookVolumeDetails | null> {
+  if (!book.isbn) return null;
+
+  const response = await fetchWithTimeout(
+    `https://api.openbd.jp/v1/get?isbn=${encodeURIComponent(normalizeIsbn(book.isbn))}`,
+  );
+  if (!response.ok) return null;
+
+  const item = ((await response.json()) as OpenBdResponse)[0];
+  if (!item?.summary?.title) return null;
+  const textContents = item.onix?.CollateralDetail?.TextContent ?? [];
+  const preferredText =
+    textContents.find((entry) => entry.TextType === '03' && entry.Text?.trim()) ??
+    textContents.find((entry) => entry.Text?.trim());
+
+  return {
+    title: item.summary.title,
+    author: normalizeAuthor(item.summary.author),
+    publisher: item.summary.publisher,
+    description: plainTextDescription(preferredText?.Text),
+    thumbnailUrl: normalizeImageUrl(item.summary.cover),
+    source: 'OpenBD',
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+async function lookupRakutenBookVolumeDetails(
+  book: Pick<Book, 'isbn' | 'title' | 'seriesTitle' | 'volumeNumber'>,
+): Promise<BookVolumeDetails | null> {
+  if (!env.rakutenAppId || !env.rakutenAccessKey) return null;
+
+  const searchParams = new URLSearchParams({
+    applicationId: env.rakutenAppId,
+    accessKey: env.rakutenAccessKey,
+    format: 'json',
+  });
+  if (book.isbn) searchParams.set('isbn', normalizeIsbn(book.isbn));
+  else searchParams.set('title', book.title);
+
+  const path = 'BooksBook/Search/20170404';
+  const response = await fetchRakutenWithTimeout(
+    `https://openapi.rakuten.co.jp/services/api/${path}?${searchParams.toString()}`,
+    { path, params: Object.fromEntries(searchParams.entries()) },
+  );
+  if (!response.ok) return null;
+
+  const payload = (await response.json()) as RakutenBooksResponse;
+  const item = selectRakutenItem(payload.Items, {
+    isbn: book.isbn,
+    seriesTitle: book.seriesTitle,
+    volumeNumber: book.volumeNumber,
+  });
+  if (!item?.title) return null;
+
+  return {
+    title: item.title,
+    subtitle: item.subTitle,
+    author: normalizeAuthor(item.author),
+    publisher: item.publisherName,
+    description: plainTextDescription(item.itemCaption),
+    thumbnailUrl: firstCoverUrl(item.largeImageUrl, item.mediumImageUrl, item.smallImageUrl),
+    source: 'Rakuten Books',
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+export async function lookupBookVolumeDetails(
+  book: Pick<Book, 'isbn' | 'title' | 'seriesTitle' | 'volumeNumber'>,
+): Promise<BookVolumeDetails | null> {
+  let details: BookVolumeDetails | null = null;
+
+  try {
+    details = await lookupGoogleBookVolumeDetails(book);
+  } catch {
+    details = null;
+  }
+  if (details?.description && details.publisher) return details;
+
+  try {
+    details = mergeVolumeDetails(details, await lookupOpenBdVolumeDetails(book));
+  } catch {
+    // Continue to Rakuten when OpenBD has no record or is temporarily unavailable.
+  }
+  if (details?.description && details.publisher) return details;
+
+  try {
+    details = mergeVolumeDetails(details, await lookupRakutenBookVolumeDetails(book));
+  } catch {
+    // A missing synopsis is a valid result; metadata already found above remains usable.
+  }
+  if (details?.publisher || !book.isbn) return details;
+
+  try {
+    details = mergeVolumeDetails(
+      details,
+      await lookupGoogleBookVolumeDetails({ ...book, isbn: undefined }),
+    );
+  } catch {
+    // Keep the exact ISBN metadata when the final title-based fallback is unavailable.
+  }
+  if (details?.publisher) return details;
+
+  try {
+    details = mergeVolumeDetails(
+      details,
+      await lookupRakutenBookVolumeDetails({ ...book, isbn: undefined }),
+    );
+  } catch {
+    // Publisher information can remain unavailable for books absent from every provider.
+  }
+  return details;
 }
 
 export async function lookupBookByTitle(title: string, fallbackIsbn?: string): Promise<BookInput | null> {

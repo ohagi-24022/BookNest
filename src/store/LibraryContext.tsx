@@ -11,6 +11,7 @@ import {
 } from 'react';
 
 import { BookLookupDebugEntry, lookupBookByIsbn, lookupBookByTitle, lookupBookDebugInfo } from '../lib/bookApis';
+import { normalizeAuthor } from '../lib/bookMetadata';
 import {
   findDuplicateBook as findDuplicate,
   normalizeBookInput,
@@ -38,6 +39,7 @@ type BookRow = {
   series_title: string;
   volume_number: number | null;
   author: string | null;
+  publisher: string | null;
   thumbnail_url: string | null;
   status: ReadingStatus;
   created_at: string;
@@ -62,6 +64,7 @@ type MetadataRepairResult = {
   seriesTitle?: string;
   volumeNumber?: number;
   author?: string;
+  publisher?: string;
   debugEntries?: BookLookupDebugEntry[];
 };
 
@@ -111,7 +114,8 @@ function fromBookRow(row: BookRow): Book {
     title: row.title,
     seriesTitle: shouldRepairSeriesTitle ? parsedSeries.seriesTitle || parsedTitle.seriesTitle : row.series_title,
     volumeNumber: row.volume_number ?? parsedTitle.volumeNumber ?? parsedSeries.volumeNumber,
-    author: row.author ?? undefined,
+    author: normalizeAuthor(row.author ?? undefined),
+    publisher: row.publisher ?? undefined,
     thumbnailUrl: row.thumbnail_url?.replace(/^http:\/\//i, 'https://') ?? undefined,
     status: row.status,
     createdAt: row.created_at,
@@ -131,6 +135,7 @@ function toBookInsert(bookInput: BookInput, userId: string, bookId: string) {
     series_title: seriesTitle,
     volume_number: volumeNumber,
     author: bookInput.author ?? null,
+    publisher: bookInput.publisher ?? null,
     thumbnail_url: bookInput.thumbnailUrl?.replace(/^http:\/\//i, 'https://') ?? null,
     status: bookInput.status,
   };
@@ -143,6 +148,7 @@ function toBookUpdate(updates: Partial<BookInput>) {
     ...(updates.seriesTitle !== undefined ? { series_title: updates.seriesTitle } : {}),
     ...(updates.volumeNumber !== undefined ? { volume_number: updates.volumeNumber ?? null } : {}),
     ...(updates.author !== undefined ? { author: updates.author || null } : {}),
+    ...(updates.publisher !== undefined ? { publisher: updates.publisher || null } : {}),
     ...(updates.thumbnailUrl !== undefined ? { thumbnail_url: updates.thumbnailUrl || null } : {}),
     ...(updates.status !== undefined ? { status: updates.status } : {}),
   };
@@ -283,7 +289,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
         const { data, error: fetchError } = await client
           .from('books')
           .select(
-            'id,user_id,isbn,title,series_title,volume_number,author,thumbnail_url,status,created_at',
+            'id,user_id,isbn,title,series_title,volume_number,author,publisher,thumbnail_url,status,created_at',
           )
           .order('created_at', { ascending: false });
 
@@ -314,11 +320,12 @@ export function LibraryProvider({ children }: PropsWithChildren) {
             !book.thumbnailUrl ||
             isKnownUnavailableCoverUrl(book.thumbnailUrl) ||
             !book.volumeNumber ||
+            !book.publisher ||
             book.seriesTitle.trim() === book.title.trim()
           ) &&
           !enrichedIsbnsRef.current.has(book.isbn),
       )
-      .slice(0, 5);
+      .slice(0, 10);
 
     if (booksNeedingMetadata.length === 0) return;
 
@@ -341,6 +348,8 @@ export function LibraryProvider({ children }: PropsWithChildren) {
           const updates: Partial<BookInput> = {
             thumbnailUrl: metadata.thumbnailUrl ?? (isKnownUnavailableCoverUrl(book.thumbnailUrl) ? '' : book.thumbnailUrl),
             volumeNumber: book.volumeNumber ?? metadata.volumeNumber,
+            author: metadata.author ?? book.author,
+            publisher: metadata.publisher ?? book.publisher,
             seriesTitle:
               book.seriesTitle.trim() === book.title.trim() || parseSeriesTitle(book.seriesTitle).volumeNumber
                 ? metadata.seriesTitle
@@ -443,6 +452,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
         seriesTitle: localBook.seriesTitle,
         volumeNumber: localBook.volumeNumber,
         author: localBook.author,
+        publisher: localBook.publisher,
         thumbnailUrl: localBook.thumbnailUrl,
         status: localBook.status,
       });
@@ -538,6 +548,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
       seriesTitle: metadata.seriesTitle,
       volumeNumber: metadata.volumeNumber,
       author: metadata.author ?? book.author,
+      publisher: metadata.publisher ?? book.publisher,
       thumbnailUrl: metadata.thumbnailUrl ?? book.thumbnailUrl,
     };
     const debugEntries = metadata.thumbnailUrl
@@ -554,6 +565,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
       seriesTitle: updates.seriesTitle,
       volumeNumber: updates.volumeNumber,
       author: updates.author,
+      publisher: updates.publisher,
       debugEntries,
     };
   }, [books, updateBook]);

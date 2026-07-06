@@ -1,3 +1,4 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Link } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -65,14 +66,11 @@ export function SeriesCard({
                     : `${group.title}をお気に入りに追加`
                 }
               >
-                <Text
-                  style={[
-                    styles.favoriteButtonText,
-                    { color: favorite ? '#c58b00' : colors.muted },
-                  ]}
-                >
-                  {favorite ? '★' : '☆'}
-                </Text>
+                <Ionicons
+                  color={favorite ? colors.primary : colors.muted}
+                  name={favorite ? 'bookmark' : 'bookmark-outline'}
+                  size={18}
+                />
               </Pressable>
               {showPublishedLatestVolume && (
                 <Pressable
@@ -104,6 +102,11 @@ export function SeriesCard({
                 ? ` / ${group.latestVolume}巻まで`
                 : ''}
           </Text>
+          {(group.authors.length > 0 || group.publishers.length > 0) && (
+            <Text numberOfLines={2} style={[styles.credits, { color: colors.muted }]}>
+              {[group.authors.join(', '), group.publishers.join(', ')].filter(Boolean).join(' / ')}
+            </Text>
+          )}
           <View style={[styles.progressTrack, { backgroundColor: colors.elevated }]}>
             <View
               style={[
@@ -151,7 +154,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 34,
   },
-  favoriteButtonText: { fontSize: 18, lineHeight: 21 },
   refreshButton: {
     alignItems: 'center',
     borderRadius: 6,
@@ -164,6 +166,7 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.4 },
   refreshText: { fontSize: 11, fontWeight: '800' },
   meta: { fontSize: 12, marginTop: 6 },
+  credits: { fontSize: 11, lineHeight: 16, marginTop: 4 },
   progressTrack: {
     borderRadius: 999,
     height: 5,

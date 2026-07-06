@@ -38,6 +38,7 @@ function RootStack() {
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="series/[title]" options={{ title: 'シリーズ' }} />
+        <Stack.Screen name="book/[id]" options={{ title: '巻の情報' }} />
       </Stack>
     </>
   );

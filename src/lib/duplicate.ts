@@ -1,4 +1,5 @@
 import { Book, BookInput } from '../types';
+import { normalizeAuthor } from './bookMetadata';
 import { normalizeSeriesKey, parseSeriesTitle } from './series';
 
 function normalizeIsbn(value?: string) {
@@ -12,6 +13,7 @@ export function normalizeBookInput(bookInput: BookInput): BookInput {
     ...bookInput,
     seriesTitle: bookInput.seriesTitle || parsed.seriesTitle,
     volumeNumber: bookInput.volumeNumber ?? parsed.volumeNumber,
+    author: normalizeAuthor(bookInput.author),
     thumbnailUrl: bookInput.thumbnailUrl?.replace(/^http:\/\//i, 'https://'),
   };
 }

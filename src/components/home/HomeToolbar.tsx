@@ -55,9 +55,13 @@ export function HomeToolbar({
       <Text style={[styles.subtitle, { color: colors.muted }]}>
         {requiresAuth
           ? '設定からログインしてください'
-          : viewMode === 'series'
-            ? `${visibleCount}/${totalCount} シリーズ`
-            : `${visibleCount}/${totalCount} 冊`}
+          : visibleCount === totalCount
+            ? viewMode === 'series'
+              ? `全${totalCount}シリーズ`
+              : `全${totalCount}冊`
+            : viewMode === 'series'
+              ? `${visibleCount}シリーズを表示`
+              : `${visibleCount}冊を表示`}
       </Text>
 
       {loading && (

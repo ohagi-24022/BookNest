@@ -1,5 +1,6 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import * as WebBrowser from 'expo-web-browser';
-import { useLocalSearchParams, useNavigation } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useLayoutEffect, useMemo, useState } from 'react';
 import {
   Alert,
@@ -32,6 +33,7 @@ function isOwnedBook(item: ShelfItem): item is Book {
 export default function SeriesScreen() {
   const params = useLocalSearchParams<{ title: string }>();
   const navigation = useNavigation();
+  const router = useRouter();
   const seriesTitle = decodeURIComponent(params.title ?? '');
   const { addBook, getSeriesItems, bulkUpdateStatus, updateBook, deleteBook, repairBookMetadata } =
     useLibrary();
@@ -61,9 +63,11 @@ export default function SeriesScreen() {
           onPress={() => toggleFavoriteSeries(seriesTitle)}
           style={styles.headerFavoriteButton}
         >
-          <Text style={[styles.headerFavoriteText, { color: favorite ? '#c58b00' : colors.muted }]}>
-            {favorite ? '★' : '☆'}
-          </Text>
+          <Ionicons
+            color={favorite ? colors.primary : colors.muted}
+            name={favorite ? 'bookmark' : 'bookmark-outline'}
+            size={21}
+          />
         </Pressable>
       ),
     });
@@ -99,6 +103,7 @@ export default function SeriesScreen() {
         seriesTitle: item.seriesTitle,
         volumeNumber: item.volumeNumber,
         author: metadata?.author,
+        publisher: metadata?.publisher,
         thumbnailUrl: metadata?.thumbnailUrl,
         status: 'unread',
       });
@@ -169,6 +174,7 @@ export default function SeriesScreen() {
           `取得タイトル: ${result.title}`,
           `シリーズ: ${result.seriesTitle ?? 'なし'}`,
           `巻数: ${result.volumeNumber ?? 'なし'}`,
+          `出版社: ${result.publisher ?? 'なし'}`,
           `表紙: ${beforeCover} → ${afterCover}`,
           result.afterThumbnailUrl ? `表紙URL: ${result.afterThumbnailUrl}` : '表紙URL: なし',
           ...(result.debugEntries?.length
@@ -240,24 +246,43 @@ export default function SeriesScreen() {
               >
                 <Text style={[styles.checkboxText, { color: colors.text }]}>{selected ? '✓' : missing ? '+' : ''}</Text>
               </Pressable>
-              <BookCover
-                thumbnailUrl={item.thumbnailUrl}
-                isbn={isOwnedBook(item) ? item.isbn : undefined}
-                style={styles.cover}
-                missing={missing}
-                placeholderText={`No.${item.volumeNumber ?? '-'}`}
-              />
               <Pressable
-                onLongPress={() => isOwnedBook(item) && startEditing(item)}
-                style={styles.rowBody}
+                disabled={missing}
+                onPress={() => isOwnedBook(item) && router.push(`/book/${encodeURIComponent(item.id)}`)}
               >
-                <Text style={[styles.bookTitle, { color: missing ? colors.muted : colors.text }]} numberOfLines={2}>
-                  {item.title}
-                </Text>
-                <Text style={[styles.meta, { color: colors.muted }]}>
-                  {item.volumeNumber ? `${item.volumeNumber}巻` : '巻数なし'} /{' '}
-                  {missing ? '未所持' : statusLabels[item.status]}
-                </Text>
+                <BookCover
+                  thumbnailUrl={item.thumbnailUrl}
+                  isbn={isOwnedBook(item) ? item.isbn : undefined}
+                  style={styles.cover}
+                  missing={missing}
+                  placeholderText={`No.${item.volumeNumber ?? '-'}`}
+                />
+              </Pressable>
+              <View style={styles.rowBody}>
+                <Pressable
+                  onPress={() =>
+                    isOwnedBook(item) &&
+                    editingId !== item.id &&
+                    router.push(`/book/${encodeURIComponent(item.id)}`)
+                  }
+                  onLongPress={() => isOwnedBook(item) && startEditing(item)}
+                >
+                  <Text
+                    style={[styles.bookTitle, { color: missing ? colors.muted : colors.text }]}
+                    numberOfLines={2}
+                  >
+                    {item.title}
+                  </Text>
+                  <Text style={[styles.meta, { color: colors.muted }]}>
+                    {item.volumeNumber ? `${item.volumeNumber}巻` : '巻数なし'} /{' '}
+                    {missing ? '未所持' : statusLabels[item.status]}
+                  </Text>
+                  {isOwnedBook(item) && (item.author || item.publisher) && (
+                    <Text style={[styles.credits, { color: colors.muted }]} numberOfLines={2}>
+                      {[item.author, item.publisher].filter(Boolean).join(' / ')}
+                    </Text>
+                  )}
+                </Pressable>
                 {missing && (
                   <View style={styles.actionRow}>
                     <Pressable
@@ -326,7 +351,7 @@ export default function SeriesScreen() {
                     </Pressable>
                   </View>
                 )}
-              </Pressable>
+              </View>
             </View>
           );
         }}
@@ -379,6 +404,7 @@ const styles = StyleSheet.create({
   rowBody: { flex: 1 },
   bookTitle: { fontSize: 16, fontWeight: '800', lineHeight: 21 },
   meta: { fontSize: 13, marginTop: 6 },
+  credits: { fontSize: 12, lineHeight: 17, marginTop: 4 },
   editBox: { gap: 8, marginTop: 10 },
   editInput: {
     borderRadius: 8,
@@ -408,5 +434,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 40,
   },
-  headerFavoriteText: { fontSize: 22, lineHeight: 26 },
 });

@@ -1,4 +1,5 @@
 import { Book, MissingBook, ShelfItem } from '../types';
+import { normalizeAuthors } from './bookMetadata';
 import { getMissingVolumes } from './series';
 
 export type SeriesGroup = {
@@ -9,6 +10,8 @@ export type SeriesGroup = {
   unreadCount: number;
   readingCount: number;
   readCount: number;
+  authors: string[];
+  publishers: string[];
   latestVolume?: number;
   latestAddedAt: string;
 };
@@ -36,6 +39,10 @@ export function buildSeriesGroups(books: Book[]): SeriesGroup[] {
         unreadCount: groupedBooks.filter((book) => book.status === 'unread').length,
         readingCount: groupedBooks.filter((book) => book.status === 'reading').length,
         readCount: groupedBooks.filter((book) => book.status === 'read').length,
+        authors: normalizeAuthors(groupedBooks.map((book) => book.author)),
+        publishers: [
+          ...new Set(groupedBooks.map((book) => book.publisher).filter((value): value is string => !!value)),
+        ],
         latestVolume: sortedBooks[0]?.volumeNumber,
         latestAddedAt: groupedBooks.reduce(
           (latest, book) => (book.createdAt > latest ? book.createdAt : latest),

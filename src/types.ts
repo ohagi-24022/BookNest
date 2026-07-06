@@ -8,6 +8,7 @@ export type Book = {
   seriesTitle: string;
   volumeNumber?: number;
   author?: string;
+  publisher?: string;
   thumbnailUrl?: string;
   status: ReadingStatus;
   createdAt: string;

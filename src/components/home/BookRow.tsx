@@ -9,7 +9,7 @@ export function BookRow({ book }: { book: Book }) {
   const { colors } = useAppTheme();
 
   return (
-    <Link href={`/series/${encodeURIComponent(book.seriesTitle)}`} asChild>
+    <Link href={`/book/${encodeURIComponent(book.id)}`} asChild>
       <Pressable style={[styles.row, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <BookCover thumbnailUrl={book.thumbnailUrl} isbn={book.isbn} style={styles.cover} />
         <View style={styles.body}>
@@ -20,6 +20,11 @@ export function BookRow({ book }: { book: Book }) {
             {book.seriesTitle}
             {book.volumeNumber ? ` / ${book.volumeNumber}巻` : ''}
           </Text>
+          {(book.author || book.publisher) && (
+            <Text style={[styles.credits, { color: colors.muted }]} numberOfLines={2}>
+              {[book.author, book.publisher].filter(Boolean).join(' / ')}
+            </Text>
+          )}
         </View>
       </Pressable>
     </Link>
@@ -40,4 +45,5 @@ const styles = StyleSheet.create({
   body: { flex: 1 },
   title: { fontSize: 16, fontWeight: '800', lineHeight: 21 },
   meta: { fontSize: 12, marginTop: 6 },
+  credits: { fontSize: 11, lineHeight: 16, marginTop: 4 },
 });

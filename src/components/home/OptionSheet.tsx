@@ -1,4 +1,5 @@
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useAppTheme } from '../../store/ThemeContext';
 
@@ -12,6 +13,7 @@ type OptionSheetProps = {
   title: string;
   options: Option[];
   selectedValue: string;
+  onBack?: () => void;
   onSelect: (value: string) => void;
   onClose: () => void;
 };
@@ -21,6 +23,7 @@ export function OptionSheet({
   title,
   options,
   selectedValue,
+  onBack,
   onSelect,
   onClose,
 }: OptionSheetProps) {
@@ -33,30 +36,44 @@ export function OptionSheet({
           onPress={(event) => event.stopPropagation()}
           style={[styles.sheet, { backgroundColor: colors.surface }]}
         >
-          <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
-          {options.map((option) => {
-            const selected = option.value === selectedValue;
-            return (
+          <View style={styles.header}>
+            {onBack && (
               <Pressable
-                key={option.value}
-                onPress={() => onSelect(option.value)}
-                style={[styles.row, { borderBottomColor: colors.border }]}
+                accessibilityLabel="表示条件へ戻る"
+                hitSlop={8}
+                onPress={onBack}
+                style={styles.backButton}
               >
-                <View
-                  style={[
-                    styles.checkbox,
-                    { borderColor: selected ? colors.text : colors.border },
-                    selected && { backgroundColor: colors.text },
-                  ]}
-                >
-                  <Text style={[styles.checkmark, { color: colors.background }]}>
-                    {selected ? '✓' : ''}
-                  </Text>
-                </View>
-                <Text style={[styles.optionText, { color: colors.text }]}>{option.label}</Text>
+                <Ionicons color={colors.text} name="chevron-back" size={22} />
               </Pressable>
-            );
-          })}
+            )}
+            <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
+          </View>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {options.map((option) => {
+              const selected = option.value === selectedValue;
+              return (
+                <Pressable
+                  key={option.value}
+                  onPress={() => onSelect(option.value)}
+                  style={[styles.row, { borderBottomColor: colors.border }]}
+                >
+                  <View
+                    style={[
+                      styles.checkbox,
+                      { borderColor: selected ? colors.text : colors.border },
+                      selected && { backgroundColor: colors.text },
+                    ]}
+                  >
+                    <Text style={[styles.checkmark, { color: colors.background }]}>
+                      {selected ? '✓' : ''}
+                    </Text>
+                  </View>
+                  <Text style={[styles.optionText, { color: colors.text }]}>{option.label}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
         </Pressable>
       </Pressable>
     </Modal>
@@ -74,12 +91,22 @@ const styles = StyleSheet.create({
   sheet: {
     borderRadius: 8,
     maxWidth: 360,
+    maxHeight: '78%',
     overflow: 'hidden',
     paddingHorizontal: 16,
     paddingTop: 16,
     width: '100%',
   },
-  title: { fontSize: 17, fontWeight: '900', marginBottom: 6 },
+  header: { alignItems: 'center', flexDirection: 'row', minHeight: 36 },
+  backButton: {
+    alignItems: 'center',
+    height: 36,
+    justifyContent: 'center',
+    marginLeft: -7,
+    marginRight: 3,
+    width: 36,
+  },
+  title: { flex: 1, fontSize: 17, fontWeight: '900', marginBottom: 6 },
   row: {
     alignItems: 'center',
     borderBottomWidth: StyleSheet.hairlineWidth,
