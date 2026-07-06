@@ -1,24 +1,22 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useScrollToTop } from '@react-navigation/native';
-import { Link } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   Animated,
   FlatList,
-  Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
-  Pressable,
   ScrollView,
   StyleSheet,
-  Text,
-  TextInput,
   View,
 } from 'react-native';
 
-import { BookCover } from '../../src/components/BookCover';
+import { BookRow } from '../../src/components/home/BookRow';
+import { EmptyLibraryState } from '../../src/components/home/EmptyLibraryState';
+import { HomeToolbar } from '../../src/components/home/HomeToolbar';
+import { OptionSheet } from '../../src/components/home/OptionSheet';
+import { SeriesCard } from '../../src/components/home/SeriesCard';
 import {
   lookupLatestSeriesPublication,
   SeriesPublicationInfo,
@@ -222,9 +220,6 @@ export default function HomeScreen() {
       return right.createdAt.localeCompare(left.createdAt);
     });
   }, [bookSort, books, favoriteSeriesKeySet, filter, query, seriesStats]);
-  const renderCover = (book: Book) => (
-    <BookCover thumbnailUrl={book.thumbnailUrl} isbn={book.isbn} style={styles.cover} />
-  );
   const listVersion = `${books.length}-${seriesGroups.length}-${filter}-${query}`;
   const selectedFilterLabel = filters.find((option) => option.value === filter)?.label ?? 'すべて';
   const selectedSortLabel =
@@ -333,93 +328,27 @@ export default function HomeScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
-      <Animated.View
-        onLayout={(event) => {
-          const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+      <HomeToolbar
+        translateY={toolbarTranslateY}
+        viewMode={viewMode}
+        visibleCount={viewMode === 'series' ? visibleGroups.length : visibleBooks.length}
+        totalCount={viewMode === 'series' ? seriesGroups.length : books.length}
+        requiresAuth={requiresAuth}
+        loading={loading}
+        error={error}
+        query={query}
+        filterLabel={selectedFilterLabel}
+        sortLabel={selectedSortLabel}
+        onHeightChange={(nextHeight) => {
           if (nextHeight === toolbarHeight) return;
           setToolbarHeight(nextHeight);
           if (!toolbarVisibleRef.current) toolbarTranslateY.setValue(-nextHeight);
         }}
-        style={[
-          styles.toolbar,
-          {
-            backgroundColor: colors.background,
-            borderBottomColor: colors.border,
-            transform: [{ translateY: toolbarTranslateY }],
-          },
-        ]}
-      >
-        <View style={styles.titleRow}>
-          <View style={styles.titleBlock}>
-            <Text style={[styles.title, { color: colors.text }]}>BookNest</Text>
-            <Text style={[styles.subtitle, { color: colors.muted }]}>
-              {requiresAuth
-                ? '設定からログインしてください'
-                : viewMode === 'series'
-                  ? `${visibleGroups.length}/${seriesGroups.length} シリーズ`
-                  : `${visibleBooks.length}/${books.length} 冊`}
-            </Text>
-          </View>
-        </View>
-
-        {loading && (
-          <View style={[styles.notice, { backgroundColor: colors.elevated }]}>
-            <ActivityIndicator color={colors.text} />
-            <Text style={[styles.noticeText, { color: colors.text }]}>蔵書を読み込んでいます</Text>
-          </View>
-        )}
-
-        {!!error && (
-          <View style={[styles.notice, { backgroundColor: '#ffeceb' }]}>
-            <Text style={[styles.noticeText, { color: colors.danger }]}>{error}</Text>
-          </View>
-        )}
-
-        <TextInput
-          value={query}
-          onChangeText={setQuery}
-          placeholder="本棚を検索"
-          placeholderTextColor={colors.muted}
-          style={[styles.search, { backgroundColor: colors.input, color: colors.text }]}
-        />
-
-        <View style={styles.controlRow}>
-          <View style={[styles.modeSwitch, { backgroundColor: colors.elevated }]}>
-            {[
-              ['series', 'シリーズ'],
-              ['books', '全冊'],
-            ].map(([value, label]) => (
-              <Pressable
-                key={value}
-                onPress={() => selectViewMode(value as 'series' | 'books')}
-                style={[styles.modeButton, viewMode === value && { backgroundColor: colors.text }]}
-              >
-                <Text style={[styles.modeText, { color: viewMode === value ? colors.background : colors.muted }]}>
-                  {label}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-          <Pressable
-            onPress={() => setOpenMenu('filter')}
-            style={[styles.menuButton, { borderColor: colors.border }]}
-          >
-            <Text numberOfLines={1} style={[styles.menuButtonText, { color: colors.text }]}>
-              条件: {selectedFilterLabel}
-            </Text>
-            <Text style={[styles.menuChevron, { color: colors.muted }]}>▼</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => setOpenMenu('sort')}
-            style={[styles.menuButton, { borderColor: colors.border }]}
-          >
-            <Text numberOfLines={1} style={[styles.menuButtonText, { color: colors.text }]}>
-              並び: {selectedSortLabel}
-            </Text>
-            <Text style={[styles.menuChevron, { color: colors.muted }]}>▼</Text>
-          </Pressable>
-        </View>
-      </Animated.View>
+        onQueryChange={setQuery}
+        onViewModeChange={selectViewMode}
+        onOpenFilter={() => setOpenMenu('filter')}
+        onOpenSort={() => setOpenMenu('sort')}
+      />
 
       {viewMode === 'series' ? (
         <ScrollView
@@ -431,112 +360,27 @@ export default function HomeScreen() {
           onScroll={handleScroll}
           scrollEventThrottle={16}
         >
-          {visibleGroups.map((item) => (
-            <Link key={item.id} href={`/series/${encodeURIComponent(item.title)}`} asChild>
-              <Pressable style={[styles.seriesRow, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                {renderCover(item.representative)}
-                <View style={styles.seriesRowBody}>
-                  <View style={styles.seriesHeadingRow}>
-                    <Text numberOfLines={2} style={[styles.seriesTitle, { color: colors.text }]}>
-                      {item.title}
-                    </Text>
-                    <View style={styles.seriesActions}>
-                      <Pressable
-                        onPress={(event) => {
-                          event.stopPropagation();
-                          toggleFavoriteSeries(item.title);
-                        }}
-                        style={[
-                          styles.favoriteButton,
-                          { borderColor: colors.border },
-                        ]}
-                        accessibilityLabel={
-                          favoriteSeriesKeySet.has(normalizeSeriesKey(item.title))
-                            ? `${item.title}のお気に入りを解除`
-                            : `${item.title}をお気に入りに追加`
-                        }
-                      >
-                        <Text
-                          style={[
-                            styles.favoriteButtonText,
-                            {
-                              color: favoriteSeriesKeySet.has(normalizeSeriesKey(item.title))
-                                ? '#c58b00'
-                                : colors.muted,
-                            },
-                          ]}
-                        >
-                          {favoriteSeriesKeySet.has(normalizeSeriesKey(item.title)) ? '★' : '☆'}
-                        </Text>
-                      </Pressable>
-                      {showPublishedLatestVolume && (
-                        <Pressable
-                          disabled={refreshingSeriesTitle !== null}
-                          onPress={(event) => {
-                            event.stopPropagation();
-                            void refreshSeriesPublication(item.title, item.latestVolume);
-                          }}
-                          style={[
-                            styles.refreshButton,
-                            { borderColor: colors.border },
-                            refreshingSeriesTitle !== null && styles.refreshButtonDisabled,
-                          ]}
-                        >
-                          <Text style={[styles.refreshButtonText, { color: colors.text }]}>
-                            {refreshingSeriesTitle === item.title ? '更新中' : '更新'}
-                          </Text>
-                        </Pressable>
-                      )}
-                    </View>
-                  </View>
-                  <Text style={[styles.meta, { color: colors.muted }]}>
-                    {item.ownedCount} 冊所持
-                    {showPublishedLatestVolume
-                      ? publicationCache[normalizeSeriesKey(item.title)]
-                        ? ` / 刊行 ${publicationCache[normalizeSeriesKey(item.title)].latestVolume}巻まで`
-                        : ' / 刊行巻数 未取得'
-                      : item.latestVolume
-                        ? ` / ${item.latestVolume}巻まで`
-                        : ''}
-                  </Text>
-                  <View style={[styles.progressTrack, { backgroundColor: colors.elevated }]}>
-                    <View
-                      style={[
-                        styles.progressFill,
-                        {
-                          backgroundColor:
-                            (seriesStats.get(item.title)?.missingVolumes.length ?? 0) > 0
-                              ? '#765100'
-                              : colors.success,
-                          width: `${Math.min(seriesStats.get(item.title)?.completionRate ?? 100, 100)}%`,
-                        },
-                      ]}
-                    />
-                  </View>
-                  <View style={styles.statusRow}>
-                    {item.unreadCount > 0 && <Text style={styles.unreadBadge}>積読 {item.unreadCount}</Text>}
-                    {(seriesStats.get(item.title)?.missingVolumes.length ?? 0) > 0 && (
-                      <Text style={styles.missingBadge}>
-                        不足 {seriesStats.get(item.title)?.missingVolumes.length}
-                      </Text>
-                    )}
-                    {item.readCount === item.ownedCount && <Text style={styles.readBadge}>読了</Text>}
-                  </View>
-                </View>
-              </Pressable>
-            </Link>
-          ))}
+          {visibleGroups.map((item) => {
+            const stats = seriesStats.get(item.title);
+            const cacheKey = normalizeSeriesKey(item.title);
+            return (
+              <SeriesCard
+                key={item.id}
+                group={item}
+                missingVolumes={stats?.missingVolumes ?? []}
+                completionRate={stats?.completionRate ?? 100}
+                favorite={favoriteSeriesKeySet.has(cacheKey)}
+                showPublishedLatestVolume={showPublishedLatestVolume}
+                publicationInfo={publicationCache[cacheKey]}
+                refreshing={refreshingSeriesTitle === item.title}
+                refreshDisabled={refreshingSeriesTitle !== null}
+                onToggleFavorite={() => toggleFavoriteSeries(item.title)}
+                onRefresh={() => void refreshSeriesPublication(item.title, item.latestVolume)}
+              />
+            );
+          })}
           {visibleGroups.length === 0 && !loading ? (
-            <View style={styles.empty}>
-              <Text style={[styles.emptyTitle, { color: colors.text }]}>
-                {requiresAuth ? 'ログイン待ちです' : 'まだ本がありません'}
-              </Text>
-              <Text style={[styles.emptyCopy, { color: colors.muted }]}>
-                {requiresAuth
-                  ? '設定タブでSupabase Authにログインすると、本棚が同期されます。'
-                  : '中央タブからISBNをスキャンするか、手動登録してください。'}
-              </Text>
-            </View>
+            <EmptyLibraryState requiresAuth={requiresAuth} libraryIsEmpty={books.length === 0} />
           ) : null}
         </ScrollView>
       ) : (
@@ -550,282 +394,44 @@ export default function HomeScreen() {
           contentContainerStyle={[styles.bookList, { paddingTop: listTopPadding }]}
           onScroll={handleScroll}
           scrollEventThrottle={16}
-          renderItem={({ item }) => (
-            <Link href={`/series/${encodeURIComponent(item.seriesTitle)}`} asChild>
-              <Pressable style={[styles.bookRow, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                <BookCover thumbnailUrl={item.thumbnailUrl} isbn={item.isbn} style={styles.rowCover} />
-                <View style={styles.bookRowBody}>
-                  <Text numberOfLines={2} style={[styles.bookTitle, { color: colors.text }]}>
-                    {item.title}
-                  </Text>
-                  <Text style={[styles.meta, { color: colors.muted }]} numberOfLines={2}>
-                    {item.seriesTitle}
-                    {item.volumeNumber ? ` / ${item.volumeNumber}巻` : ''}
-                  </Text>
-                </View>
-              </Pressable>
-            </Link>
-          )}
+          renderItem={({ item }) => <BookRow book={item} />}
           ListEmptyComponent={
-          !loading ? (
-            <View style={styles.empty}>
-              <Text style={[styles.emptyTitle, { color: colors.text }]}>表示できる本がありません</Text>
-            </View>
-          ) : null
-        }
+            !loading ? (
+              <EmptyLibraryState requiresAuth={requiresAuth} libraryIsEmpty={books.length === 0} />
+            ) : null
+          }
         />
       )}
 
-      <Modal
-        animationType="fade"
-        onRequestClose={closeMenu}
-        transparent
+      <OptionSheet
         visible={openMenu !== null}
-      >
-        <Pressable onPress={closeMenu} style={styles.modalBackdrop}>
-          <Pressable
-            onPress={(event) => event.stopPropagation()}
-            style={[styles.optionSheet, { backgroundColor: colors.surface }]}
-          >
-            <Text style={[styles.optionTitle, { color: colors.text }]}>
-              {openMenu === 'sort' ? '並び替え' : '表示条件'}
-            </Text>
-            {(openMenu === 'sort'
-              ? viewMode === 'series'
-                ? seriesSortOptions
-                : bookSortOptions
-              : filters
-            ).map((option) => {
-              const selected =
-                openMenu === 'sort'
-                  ? viewMode === 'series'
-                    ? option.value === seriesSort
-                    : option.value === bookSort
-                  : option.value === filter;
-              return (
-                <Pressable
-                  key={option.value}
-                  onPress={() => {
-                    if (openMenu === 'sort') {
-                      if (viewMode === 'series') {
-                        setSeriesSort(option.value as SeriesSort);
-                      } else {
-                        setBookSort(option.value as BookSort);
-                      }
-                    } else {
-                      setFilter(option.value as HomeFilter);
-                    }
-                    closeMenu();
-                  }}
-                  style={[styles.optionRow, { borderBottomColor: colors.border }]}
-                >
-                  <View
-                    style={[
-                      styles.checkbox,
-                      { borderColor: selected ? colors.text : colors.border },
-                      selected && { backgroundColor: colors.text },
-                    ]}
-                  >
-                    <Text style={[styles.checkmark, { color: colors.background }]}>
-                      {selected ? '✓' : ''}
-                    </Text>
-                  </View>
-                  <Text style={[styles.optionText, { color: colors.text }]}>{option.label}</Text>
-                </Pressable>
-              );
-            })}
-          </Pressable>
-        </Pressable>
-      </Modal>
+        title={openMenu === 'sort' ? '並び替え' : '表示条件'}
+        options={
+          openMenu === 'sort'
+            ? viewMode === 'series'
+              ? seriesSortOptions
+              : bookSortOptions
+            : filters
+        }
+        selectedValue={openMenu === 'sort' ? (viewMode === 'series' ? seriesSort : bookSort) : filter}
+        onSelect={(value) => {
+          if (openMenu === 'sort') {
+            if (viewMode === 'series') setSeriesSort(value as SeriesSort);
+            else setBookSort(value as BookSort);
+          } else {
+            setFilter(value as HomeFilter);
+          }
+          closeMenu();
+        }}
+        onClose={closeMenu}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  toolbar: {
-    borderBottomWidth: 1,
-    left: 0,
-    paddingBottom: 10,
-    paddingHorizontal: 18,
-    paddingTop: 12,
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    zIndex: 20,
-  },
-  titleRow: { alignItems: 'center', flexDirection: 'row', minHeight: 38 },
-  titleBlock: { flex: 1 },
-  title: { fontSize: 24, fontWeight: '800', letterSpacing: 0 },
-  subtitle: { fontSize: 12, marginTop: 1 },
-  search: {
-    borderRadius: 8,
-    fontSize: 14,
-    height: 38,
-    marginTop: 8,
-    paddingHorizontal: 12,
-  },
-  controlRow: { flexDirection: 'row', gap: 6, marginTop: 8 },
-  modeSwitch: {
-    borderRadius: 8,
-    flex: 1.2,
-    flexDirection: 'row',
-    padding: 3,
-  },
-  modeButton: { alignItems: 'center', borderRadius: 6, flex: 1, height: 32, justifyContent: 'center' },
-  modeText: { fontSize: 12, fontWeight: '800' },
-  menuButton: {
-    alignItems: 'center',
-    borderRadius: 8,
-    borderWidth: 1,
-    flex: 1,
-    flexDirection: 'row',
-    height: 38,
-    justifyContent: 'center',
-    minWidth: 0,
-    paddingHorizontal: 8,
-  },
-  menuButtonText: { flexShrink: 1, fontSize: 11, fontWeight: '800' },
-  menuChevron: { fontSize: 8, marginLeft: 4 },
-  notice: {
-    alignItems: 'center',
-    borderRadius: 8,
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 8,
-    minHeight: 44,
-    paddingHorizontal: 12,
-  },
-  noticeText: { flex: 1, fontSize: 13, fontWeight: '700' },
   list: { flex: 1 },
   grid: { paddingBottom: 110, paddingHorizontal: 18 },
   bookList: { paddingBottom: 110, paddingHorizontal: 18 },
-  seriesCard: {
-    borderRadius: 8,
-    borderWidth: 1,
-    flex: 1,
-    marginBottom: 14,
-    overflow: 'hidden',
-  },
-  seriesRow: {
-    alignItems: 'center',
-    borderRadius: 8,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 10,
-    padding: 10,
-  },
-  seriesRowBody: { flex: 1 },
-  seriesHeadingRow: { alignItems: 'flex-start', flexDirection: 'row', gap: 8 },
-  seriesActions: { alignItems: 'center', flexDirection: 'row', gap: 6 },
-  cover: { backgroundColor: '#e5e5e5', borderRadius: 4, height: 120, width: 82 },
-  coverFallback: { alignItems: 'center', justifyContent: 'center' },
-  coverFallbackText: { color: '#777777', fontSize: 12, fontWeight: '800' },
-  rowCover: { backgroundColor: '#e5e5e5', borderRadius: 4, height: 96, width: 66 },
-  cardBody: { minHeight: 100, padding: 10 },
-  seriesTitle: { flex: 1, fontSize: 15, fontWeight: '800', lineHeight: 19 },
-  favoriteButton: {
-    alignItems: 'center',
-    borderRadius: 6,
-    borderWidth: 1,
-    height: 30,
-    justifyContent: 'center',
-    width: 34,
-  },
-  favoriteButtonText: { fontSize: 18, lineHeight: 21 },
-  refreshButton: {
-    alignItems: 'center',
-    borderRadius: 6,
-    borderWidth: 1,
-    height: 30,
-    justifyContent: 'center',
-    minWidth: 48,
-    paddingHorizontal: 8,
-  },
-  refreshButtonDisabled: { opacity: 0.4 },
-  refreshButtonText: { fontSize: 11, fontWeight: '800' },
-  bookRow: {
-    alignItems: 'center',
-    borderRadius: 8,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 10,
-    padding: 10,
-  },
-  bookRowBody: { flex: 1 },
-  bookTitle: { fontSize: 16, fontWeight: '800', lineHeight: 21 },
-  meta: { fontSize: 12, marginTop: 6 },
-  progressTrack: {
-    borderRadius: 999,
-    height: 5,
-    marginTop: 10,
-    overflow: 'hidden',
-  },
-  progressFill: { height: '100%' },
-  statusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
-  unreadBadge: {
-    backgroundColor: '#f5f5f5',
-    borderRadius: 6,
-    color: '#333333',
-    fontSize: 11,
-    fontWeight: '700',
-    paddingHorizontal: 7,
-    paddingVertical: 4,
-  },
-  readBadge: {
-    backgroundColor: '#e8f7ee',
-    borderRadius: 6,
-    color: '#128a3f',
-    fontSize: 11,
-    fontWeight: '700',
-    paddingHorizontal: 7,
-    paddingVertical: 4,
-  },
-  missingBadge: {
-    backgroundColor: '#fff7df',
-    borderRadius: 6,
-    color: '#765100',
-    fontSize: 11,
-    fontWeight: '700',
-    paddingHorizontal: 7,
-    paddingVertical: 4,
-  },
-  empty: { alignItems: 'center', paddingHorizontal: 20, paddingTop: 64 },
-  emptyTitle: { fontSize: 18, fontWeight: '800' },
-  emptyCopy: { fontSize: 14, lineHeight: 20, marginTop: 8, textAlign: 'center' },
-  modalBackdrop: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    flex: 1,
-    justifyContent: 'center',
-    padding: 24,
-  },
-  optionSheet: {
-    borderRadius: 8,
-    maxWidth: 360,
-    overflow: 'hidden',
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    width: '100%',
-  },
-  optionTitle: { fontSize: 17, fontWeight: '900', marginBottom: 6 },
-  optionRow: {
-    alignItems: 'center',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    minHeight: 50,
-  },
-  checkbox: {
-    alignItems: 'center',
-    borderRadius: 4,
-    borderWidth: 1,
-    height: 22,
-    justifyContent: 'center',
-    marginRight: 12,
-    width: 22,
-  },
-  checkmark: { fontSize: 14, fontWeight: '900' },
-  optionText: { fontSize: 15, fontWeight: '700' },
 });

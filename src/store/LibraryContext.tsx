@@ -11,9 +11,18 @@ import {
 } from 'react';
 
 import { BookLookupDebugEntry, lookupBookByIsbn, lookupBookByTitle, lookupBookDebugInfo } from '../lib/bookApis';
-import { getMissingVolumes, normalizeSeriesKey, parseSeriesTitle } from '../lib/series';
+import {
+  findDuplicateBook as findDuplicate,
+  normalizeBookInput,
+} from '../lib/duplicate';
+import { parseSeriesTitle } from '../lib/series';
+import {
+  buildSeriesGroups,
+  buildSeriesItems,
+  SeriesGroup,
+} from '../lib/seriesSelectors';
 import { supabase } from '../lib/supabase';
-import { Book, BookInput, MissingBook, ReadingStatus, ShelfItem } from '../types';
+import { Book, BookInput, ReadingStatus, ShelfItem } from '../types';
 import { useAuth } from './AuthContext';
 
 type SupabaseClient = NonNullable<typeof supabase>;
@@ -39,18 +48,6 @@ type SupabaseLikeError = {
   details?: string;
   hint?: string;
   code?: string;
-};
-
-type SeriesGroup = {
-  id: string;
-  title: string;
-  representative: Book;
-  ownedCount: number;
-  unreadCount: number;
-  readingCount: number;
-  readCount: number;
-  latestVolume?: number;
-  latestAddedAt: string;
 };
 
 type AddBookOptions = {
@@ -139,17 +136,6 @@ function toBookInsert(bookInput: BookInput, userId: string, bookId: string) {
   };
 }
 
-function normalizeBookInput(bookInput: BookInput): BookInput {
-  const parsed = parseSeriesTitle(bookInput.title);
-
-  return {
-    ...bookInput,
-    seriesTitle: bookInput.seriesTitle || parsed.seriesTitle,
-    volumeNumber: bookInput.volumeNumber ?? parsed.volumeNumber,
-    thumbnailUrl: bookInput.thumbnailUrl?.replace(/^http:\/\//i, 'https://'),
-  };
-}
-
 function toBookUpdate(updates: Partial<BookInput>) {
   return {
     ...(updates.isbn !== undefined ? { isbn: updates.isbn || null } : {}),
@@ -192,34 +178,12 @@ function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-function normalizeIsbn(value?: string) {
-  return value?.replace(/[^0-9X]/gi, '').toUpperCase();
-}
-
 function isKnownUnavailableCoverUrl(url?: string) {
   return !!url && /imagenotavailable|no[_-]?image|noimage/i.test(url);
 }
 
 function buildMetadataLookupTitle(book: Pick<Book, 'title' | 'seriesTitle' | 'volumeNumber'>) {
   return book.volumeNumber ? `${book.seriesTitle} ${book.volumeNumber}巻` : book.title;
-}
-
-function findDuplicate(currentBooks: Book[], bookInput: BookInput) {
-  const incomingIsbn = normalizeIsbn(bookInput.isbn);
-  if (incomingIsbn) {
-    const isbnMatch = currentBooks.find((book) => normalizeIsbn(book.isbn) === incomingIsbn);
-    if (isbnMatch) return isbnMatch;
-  }
-
-  const normalizedInput = normalizeBookInput(bookInput);
-  if (!normalizedInput.volumeNumber || !normalizedInput.seriesTitle.trim()) return undefined;
-  const seriesKey = normalizeSeriesKey(normalizedInput.seriesTitle);
-
-  return currentBooks.find(
-    (book) =>
-      book.volumeNumber === normalizedInput.volumeNumber &&
-      normalizeSeriesKey(book.seriesTitle) === seriesKey,
-  );
 }
 
 const initialBooks: Book[] = [
@@ -614,64 +578,10 @@ export function LibraryProvider({ children }: PropsWithChildren) {
     );
   }, [configured, user]);
 
-  const seriesGroups = useMemo(() => {
-    const bySeries = new Map<string, Book[]>();
-    books.forEach((book) => {
-      const group = bySeries.get(book.seriesTitle) ?? [];
-      group.push(book);
-      bySeries.set(book.seriesTitle, group);
-    });
-
-    return [...bySeries.entries()]
-      .map(([title, groupedBooks]) => {
-        const sortedBooks = [...groupedBooks].sort(
-          (a, b) => (b.volumeNumber ?? 0) - (a.volumeNumber ?? 0),
-        );
-        const representative =
-          sortedBooks.find((book) => !!book.thumbnailUrl) ?? sortedBooks[0];
-        const latestVolume = sortedBooks[0]?.volumeNumber;
-
-        return {
-          id: encodeURIComponent(title),
-          title,
-          representative,
-          ownedCount: groupedBooks.length,
-          unreadCount: groupedBooks.filter((book) => book.status === 'unread').length,
-          readingCount: groupedBooks.filter((book) => book.status === 'reading').length,
-          readCount: groupedBooks.filter((book) => book.status === 'read').length,
-          latestVolume,
-          latestAddedAt: groupedBooks.reduce(
-            (latest, book) => (book.createdAt > latest ? book.createdAt : latest),
-            groupedBooks[0]?.createdAt ?? '',
-          ),
-        };
-      })
-      .sort((a, b) => a.title.localeCompare(b.title));
-  }, [books]);
+  const seriesGroups = useMemo(() => buildSeriesGroups(books), [books]);
 
   const getSeriesItems = useCallback(
-    (seriesTitle: string) => {
-      const owned = books
-        .filter((book) => book.seriesTitle === seriesTitle)
-        .sort((a, b) => (a.volumeNumber ?? 0) - (b.volumeNumber ?? 0));
-      const missingVolumes = getMissingVolumes(
-        owned.map((book) => book.volumeNumber).filter((volume): volume is number => !!volume),
-      );
-      const missing: MissingBook[] = missingVolumes.map((volumeNumber) => ({
-        id: `missing-${seriesTitle}-${volumeNumber}`,
-        userId: DEMO_USER_ID,
-        title: `${seriesTitle} ${volumeNumber}`,
-        seriesTitle,
-        volumeNumber,
-        status: 'missing',
-        createdAt: now(),
-        isMissing: true,
-      }));
-
-      return [...owned, ...missing].sort(
-        (a, b) => (a.volumeNumber ?? 0) - (b.volumeNumber ?? 0),
-      );
-    },
+    (seriesTitle: string) => buildSeriesItems(books, seriesTitle, DEMO_USER_ID),
     [books],
   );
 
