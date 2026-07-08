@@ -17,7 +17,11 @@ type SeriesCardProps = {
   publicationInfo?: SeriesPublicationInfo;
   refreshing: boolean;
   refreshDisabled: boolean;
+  notificationAvailable: boolean;
+  notificationEnabled: boolean;
+  notificationUpdating: boolean;
   onToggleFavorite: () => void;
+  onToggleNotification: () => void;
   onRefresh: () => void;
 };
 
@@ -37,7 +41,11 @@ export function SeriesCard({
   publicationInfo,
   refreshing,
   refreshDisabled,
+  notificationAvailable,
+  notificationEnabled,
+  notificationUpdating,
   onToggleFavorite,
+  onToggleNotification,
   onRefresh,
 }: SeriesCardProps) {
   const { colors } = useAppTheme();
@@ -71,6 +79,30 @@ export function SeriesCard({
                 <Ionicons
                   color={favorite ? colors.primary : colors.muted}
                   name={favorite ? 'bookmark' : 'bookmark-outline'}
+                  size={18}
+                />
+              </Pressable>
+              <Pressable
+                disabled={notificationUpdating}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  onToggleNotification();
+                }}
+                style={[
+                  styles.favoriteButton,
+                  { borderColor: colors.border },
+                  !notificationAvailable && styles.inactiveAction,
+                  notificationUpdating && styles.disabled,
+                ]}
+                accessibilityLabel={
+                  notificationEnabled
+                    ? `${group.title}の新刊通知を解除`
+                    : `${group.title}の新刊通知を有効化`
+                }
+              >
+                <Ionicons
+                  color={notificationEnabled ? colors.primary : colors.muted}
+                  name={notificationEnabled ? 'notifications' : 'notifications-outline'}
                   size={18}
                 />
               </Pressable>
@@ -169,6 +201,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   disabled: { opacity: 0.4 },
+  inactiveAction: { opacity: 0.55 },
   refreshText: { fontSize: 11, fontWeight: '800' },
   meta: { fontSize: 12, marginTop: 6 },
   credits: { fontSize: 11, lineHeight: 16, marginTop: 4 },

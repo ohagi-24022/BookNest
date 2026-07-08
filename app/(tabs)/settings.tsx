@@ -1,7 +1,7 @@
 import { useScrollToTop } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Link } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -17,11 +17,11 @@ import {
 
 import { envStatus } from '../../src/lib/env';
 import {
-  buildSeriesSubscriptions,
   disableNewReleaseNotifications,
   enableNewReleaseNotifications,
-  getNewReleaseSubscriptions,
-  setNewReleaseSeriesSubscription,
+  getNewReleaseDiagnostics,
+  runNewReleaseCheck,
+  sendNewReleaseDebugNotification,
   syncNewReleaseSubscriptions,
 } from '../../src/lib/newReleaseNotifications';
 import { useAppSettings } from '../../src/store/AppSettingsContext';
@@ -56,37 +56,9 @@ export default function SettingsScreen() {
   const [password, setPassword] = useState('');
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [migrationSubmitting, setMigrationSubmitting] = useState(false);
+  const [newReleaseCheckSubmitting, setNewReleaseCheckSubmitting] = useState(false);
+  const [notificationDebugSubmitting, setNotificationDebugSubmitting] = useState(false);
   const [notificationSubmitting, setNotificationSubmitting] = useState(false);
-  const [subscriptionKeys, setSubscriptionKeys] = useState<string[]>([]);
-  const [subscriptionLoading, setSubscriptionLoading] = useState(false);
-  const seriesSubscriptionInputs = useMemo(
-    () => buildSeriesSubscriptions(seriesGroups),
-    [seriesGroups],
-  );
-
-  useEffect(() => {
-    if (!user || !newReleaseNotifications) {
-      setSubscriptionKeys([]);
-      return;
-    }
-
-    setSubscriptionLoading(true);
-    getNewReleaseSubscriptions(user.id)
-      .then((subscriptions) => {
-        setSubscriptionKeys(
-          subscriptions
-            .filter((subscription) => subscription.enabled)
-            .map((subscription) => subscription.seriesKey),
-        );
-      })
-      .catch((error) => {
-        Alert.alert(
-          '通知対象を読み込めませんでした',
-          error instanceof Error ? error.message : 'もう一度お試しください。',
-        );
-      })
-      .finally(() => setSubscriptionLoading(false));
-  }, [newReleaseNotifications, user]);
 
   const submitAuth = async (authMode: 'signIn' | 'signUp') => {
     if (!email.trim() || !password) {
@@ -189,16 +161,24 @@ export default function SettingsScreen() {
     setNotificationSubmitting(true);
     try {
       if (enabled) {
-        const result = await enableNewReleaseNotifications(user.id, seriesGroups);
-        setSubscriptionKeys(seriesSubscriptionInputs.map((subscription) => subscription.seriesKey));
+        await syncNewReleaseSubscriptions(user.id, seriesGroups);
         setNewReleaseNotifications(true);
-        Alert.alert(
-          '新刊通知を有効にしました',
-          `${result.subscriptionCount}シリーズを通知対象に登録しました。`,
-        );
+        try {
+          await enableNewReleaseNotifications(user.id, seriesGroups);
+          Alert.alert(
+            '新刊通知を有効にしました',
+            '大本の通知をONにしました。シリーズごとの通知ON/OFFは本棚のシリーズカードから変更できます。',
+          );
+        } catch (tokenError) {
+          Alert.alert(
+            'シリーズ通知設定を表示しました',
+            `通知対象シリーズは選択できますが、端末通知の登録に失敗しました。\n${
+              tokenError instanceof Error ? tokenError.message : 'もう一度お試しください。'
+            }`,
+          );
+        }
       } else {
         await disableNewReleaseNotifications(user.id);
-        setSubscriptionKeys([]);
         setNewReleaseNotifications(false);
       }
     } catch (error) {
@@ -211,47 +191,85 @@ export default function SettingsScreen() {
     }
   };
 
-  const toggleSeriesSubscription = async (seriesKey: string, enabled: boolean) => {
-    if (!user) return;
-    const subscription = seriesSubscriptionInputs.find((item) => item.seriesKey === seriesKey);
-    if (!subscription) return;
-
-    setSubscriptionKeys((current) =>
-      enabled ? [...new Set([...current, seriesKey])] : current.filter((key) => key !== seriesKey),
-    );
-
+  const runNotificationDebug = async () => {
+    setNotificationDebugSubmitting(true);
     try {
-      await setNewReleaseSeriesSubscription(user.id, subscription, enabled);
-    } catch (error) {
-      setSubscriptionKeys((current) =>
-        enabled ? current.filter((key) => key !== seriesKey) : [...new Set([...current, seriesKey])],
-      );
+      await sendNewReleaseDebugNotification();
       Alert.alert(
-        'シリーズ通知を更新できませんでした',
-        error instanceof Error ? error.message : 'もう一度お試しください。',
+        '通知テストを送信しました',
+        '端末に「BookNest 通知テスト」が表示されれば、端末側の通知表示は動作しています。',
       );
+    } catch (error) {
+      Alert.alert(
+        '通知テストに失敗しました',
+        error instanceof Error ? error.message : '端末の通知設定を確認して、もう一度お試しください。',
+      );
+    } finally {
+      setNotificationDebugSubmitting(false);
     }
   };
 
-  const syncNotificationSeries = async () => {
-    if (!user) return;
-    setSubscriptionLoading(true);
+  const runNewReleaseDebug = async () => {
+    if (!user) {
+      Alert.alert('ログインが必要です', '新刊チェックの確認はログイン後に利用できます。');
+      return;
+    }
+
+    setNewReleaseCheckSubmitting(true);
     try {
       await syncNewReleaseSubscriptions(user.id, seriesGroups);
-      const subscriptions = await getNewReleaseSubscriptions(user.id);
-      setSubscriptionKeys(
-        subscriptions
-          .filter((subscription) => subscription.enabled)
-          .map((subscription) => subscription.seriesKey),
+      const beforeDiagnostics = await getNewReleaseDiagnostics(user.id);
+      const result = await runNewReleaseCheck(10);
+      const afterDiagnostics = await getNewReleaseDiagnostics(user.id);
+      const checked = result.checked ?? [];
+      const checkedSummary =
+        checked.length > 0
+          ? checked
+              .slice(0, 5)
+              .map(
+                (item) =>
+                  item.error
+                    ? `${item.seriesTitle}: エラー ${item.error}`
+                    : `${item.seriesTitle}: ${
+                        item.latestVolume ? `${item.latestVolume}巻` : '最新巻不明'
+                      } / 通知${item.notified}件`,
+              )
+              .join('\n')
+          : '今回チェックされた通知対象シリーズはありません。';
+      const recentLogs =
+        afterDiagnostics.recentLogs.length > 0
+          ? afterDiagnostics.recentLogs
+              .map(
+                (log) =>
+                  `${log.seriesTitle}${log.volumeNumber ? ` ${log.volumeNumber}巻` : ''}: ${log.status}`,
+              )
+              .join('\n')
+          : '通知ログはまだありません。';
+
+      Alert.alert(
+        '新刊チェック結果',
+        [
+          `通知ONシリーズ: ${afterDiagnostics.enabledSeriesCount} / ${afterDiagnostics.subscriptionCount}`,
+          `有効な通知トークン: ${afterDiagnostics.activePushTokenCount}`,
+          `今回の確認件数: ${checked.length}`,
+          '',
+          checkedSummary,
+          '',
+          `直近ログ:\n${recentLogs}`,
+          beforeDiagnostics.enabledSeriesCount === 0
+            ? '\n本棚のシリーズカードでベルをONにすると、チェック対象になります。'
+            : '',
+        ]
+          .filter(Boolean)
+          .join('\n'),
       );
-      Alert.alert('通知対象を同期しました', `${seriesGroups.length}シリーズを確認しました。`);
     } catch (error) {
       Alert.alert(
-        '通知対象を同期できませんでした',
-        error instanceof Error ? error.message : 'もう一度お試しください。',
+        '新刊チェックに失敗しました',
+        error instanceof Error ? error.message : 'Supabase Functions の状態を確認してください。',
       );
     } finally {
-      setSubscriptionLoading(false);
+      setNewReleaseCheckSubmitting(false);
     }
   };
 
@@ -482,48 +500,44 @@ export default function SettingsScreen() {
         </View>
         <Text style={[styles.rowCopy, { color: colors.muted }]}>
           {user
-            ? `${seriesGroups.length}シリーズを通知対象として同期します。`
+            ? 'シリーズごとの通知ON/OFFは、本棚のシリーズカードから変更できます。'
             : 'ログイン後にONにすると、端末とシリーズ情報を通知用に登録します。'}
         </Text>
-        {newReleaseNotifications && user && (
-          <View style={[styles.notificationSeriesBox, { backgroundColor: colors.elevated }]}>
-            <View style={styles.notificationHeader}>
-              <Text style={[styles.rowTitle, { color: colors.text }]}>通知するシリーズ</Text>
-              <Pressable
-                disabled={subscriptionLoading}
-                onPress={() => void syncNotificationSeries()}
-                style={[styles.syncButton, { borderColor: colors.border }, subscriptionLoading && styles.disabledButton]}
-              >
-                <Text style={[styles.syncButtonText, { color: colors.text }]}>
-                  {subscriptionLoading ? '同期中' : '同期'}
-                </Text>
-              </Pressable>
-            </View>
-            {seriesSubscriptionInputs.length === 0 ? (
-              <Text style={[styles.rowCopy, { color: colors.muted }]}>
-                本棚にシリーズが追加されると選択できます。
+        <Pressable
+          disabled={notificationDebugSubmitting}
+          onPress={() => void runNotificationDebug()}
+          style={[
+            styles.neutralButton,
+            { borderColor: colors.border },
+            notificationDebugSubmitting && styles.disabledButton,
+          ]}
+        >
+          <Text style={[styles.neutralButtonText, { color: colors.text }]}>
+            {notificationDebugSubmitting ? '通知テスト中' : '通知テストを送る'}
+          </Text>
+        </Pressable>
+        <Text style={[styles.rowCopy, { color: colors.muted }]}>
+          新刊を待たずに、端末で通知が表示されるか確認できます。
+        </Text>
+        {__DEV__ && (
+          <>
+            <Pressable
+              disabled={newReleaseCheckSubmitting || !configured}
+              onPress={() => void runNewReleaseDebug()}
+              style={[
+                styles.neutralButton,
+                { borderColor: colors.border },
+                (newReleaseCheckSubmitting || !configured) && styles.disabledButton,
+              ]}
+            >
+              <Text style={[styles.neutralButtonText, { color: colors.text }]}>
+                {newReleaseCheckSubmitting ? '新刊チェック中' : '新刊チェックを手動実行'}
               </Text>
-            ) : (
-              seriesSubscriptionInputs.map((series) => (
-                <View key={series.seriesKey} style={styles.notificationSeriesRow}>
-                  <View style={styles.rowText}>
-                    <Text style={[styles.seriesTitleText, { color: colors.text }]} numberOfLines={1}>
-                      {series.seriesTitle}
-                    </Text>
-                    <Text style={[styles.rowCopy, { color: colors.muted }]}>
-                      {series.latestVolume ? `${series.latestVolume}巻まで所持` : '所持巻数未設定'}
-                    </Text>
-                  </View>
-                  <Switch
-                    onValueChange={(value) => void toggleSeriesSubscription(series.seriesKey, value)}
-                    thumbColor="#ffffff"
-                    trackColor={{ false: '#d4d4d4', true: '#31c759' }}
-                    value={subscriptionKeys.includes(series.seriesKey)}
-                  />
-                </View>
-              ))
-            )}
-          </View>
+            </Pressable>
+            <Text style={[styles.rowCopy, { color: colors.muted }]}>
+              開発用にEdge Functionを1回実行し、通知対象数と直近ログを確認します。
+            </Text>
+          </>
         )}
       </View>
 
@@ -603,29 +617,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
   },
-  notificationSeriesBox: {
-    borderRadius: 8,
-    gap: 8,
-    marginTop: 12,
-    padding: 12,
-  },
-  notificationHeader: { alignItems: 'center', flexDirection: 'row', gap: 10 },
-  notificationSeriesRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 10,
-    minHeight: 52,
-  },
-  seriesTitleText: { fontSize: 14, fontWeight: '800' },
-  syncButton: {
-    alignItems: 'center',
-    borderRadius: 8,
-    borderWidth: 1,
-    height: 34,
-    justifyContent: 'center',
-    paddingHorizontal: 12,
-  },
-  syncButtonText: { fontSize: 12, fontWeight: '800' },
   helpLink: {
     alignItems: 'center',
     borderRadius: 8,

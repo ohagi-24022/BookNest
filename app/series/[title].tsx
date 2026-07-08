@@ -328,6 +328,7 @@ export default function SeriesScreen() {
           return (
             <Pressable
               onPress={() => (missing ? void addMissingAsOwned(item) : toggleSelected(item))}
+              onLongPress={() => isOwnedBook(item) && startEditing(item)}
               style={[
                 styles.row,
                 { backgroundColor: missing ? colors.elevated : colors.surface, borderColor: colors.border },

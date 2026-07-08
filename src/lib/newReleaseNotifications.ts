@@ -25,8 +25,47 @@ export type NewReleaseSubscription = NewReleaseSubscriptionInput & {
   enabled: boolean;
 };
 
+export type NewReleaseCheckResult = {
+  checked?: Array<{
+    error?: string;
+    latestVolume: number | null;
+    notified: number;
+    seriesTitle: string;
+  }>;
+  error?: string;
+  ok?: boolean;
+};
+
+export type NewReleaseNotificationLog = {
+  createdAt: string;
+  notificationTitle?: string;
+  seriesTitle: string;
+  status: string;
+  volumeNumber?: number;
+};
+
 function getProjectId() {
   return Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
+}
+
+function describeFunctionError(error: unknown) {
+  if (error instanceof Error) {
+    const context = 'context' in error ? (error as { context?: unknown }).context : undefined;
+    if (context) {
+      try {
+        return `${error.message} / ${JSON.stringify(context)}`;
+      } catch {
+        return `${error.message} / ${String(context)}`;
+      }
+    }
+    return error.message;
+  }
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
 }
 
 export async function registerForNewReleasePushToken() {
@@ -57,6 +96,35 @@ export async function registerForNewReleasePushToken() {
   return token.data;
 }
 
+export async function sendNewReleaseDebugNotification() {
+  if (Platform.OS === 'android') {
+    await Notifications.setNotificationChannelAsync('new-releases', {
+      name: '新刊通知',
+      importance: Notifications.AndroidImportance.DEFAULT,
+    });
+  }
+
+  const { status: existingStatus } = await Notifications.getPermissionsAsync();
+  let finalStatus = existingStatus;
+  if (existingStatus !== 'granted') {
+    const { status } = await Notifications.requestPermissionsAsync();
+    finalStatus = status;
+  }
+
+  if (finalStatus !== 'granted') {
+    throw new Error('通知が許可されていません。端末の設定で通知を許可してください。');
+  }
+
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      body: 'この通知が表示されれば、端末側の通知表示は動作しています。',
+      data: { url: '/(tabs)' },
+      title: 'BookNest 通知テスト',
+    },
+    trigger: null,
+  });
+}
+
 export function buildSeriesSubscriptions(seriesGroups: SeriesGroup[]): NewReleaseSubscriptionInput[] {
   return seriesGroups.map((group) => ({
     latestVolume: group.latestVolume,
@@ -84,27 +152,22 @@ export async function enableNewReleaseNotifications(
     },
     { onConflict: 'expo_push_token' },
   );
-  if (tokenError) throw new Error('通知トークンを保存できませんでした。');
-
-  const subscriptions = buildSeriesSubscriptions(seriesGroups);
-  if (subscriptions.length > 0) {
-    const { error: subscriptionError } = await supabase
-      .from('series_subscriptions')
-      .upsert(
-        subscriptions.map((subscription) => ({
-          enabled: true,
-          latest_known_volume: subscription.latestVolume ?? null,
-          series_key: subscription.seriesKey,
-          series_title: subscription.seriesTitle,
-          updated_at: now,
-          user_id: userId,
-        })),
-        { onConflict: 'user_id,series_key' },
-      );
-    if (subscriptionError) throw new Error('新刊通知のシリーズ登録に失敗しました。');
+  if (tokenError) {
+    throw new Error(
+      `通知トークンを保存できませんでした。${tokenError.message ?? ''}${
+        tokenError.code ? ` / code: ${tokenError.code}` : ''
+      }`,
+    );
   }
 
-  return { expoPushToken, subscriptionCount: subscriptions.length };
+  await syncNewReleaseSubscriptions(userId, seriesGroups);
+  const subscriptions = await getNewReleaseSubscriptions(userId);
+
+  return {
+    enabledSubscriptionCount: subscriptions.filter((subscription) => subscription.enabled).length,
+    expoPushToken,
+    subscriptionCount: subscriptions.length,
+  };
 }
 
 export async function getNewReleaseSubscriptions(userId: string) {
@@ -133,6 +196,7 @@ export async function syncNewReleaseSubscriptions(userId: string, seriesGroups: 
   const { error } = await supabase.from('series_subscriptions').upsert(
     subscriptions.map((subscription) => ({
       latest_known_volume: subscription.latestVolume ?? null,
+      enabled: false,
       series_key: subscription.seriesKey,
       series_title: subscription.seriesTitle,
       updated_at: new Date().toISOString(),
@@ -164,6 +228,61 @@ export async function setNewReleaseSeriesSubscription(
   if (error) throw new Error('シリーズの通知設定を保存できませんでした。');
 }
 
+export async function runNewReleaseCheck(limit = 10) {
+  if (!supabase) throw new Error('Supabaseが設定されていません。');
+
+  const { data, error } = await supabase.functions.invoke<NewReleaseCheckResult>(
+    'check-new-releases',
+    { body: { limit } },
+  );
+  if (error) {
+    throw new Error(`新刊チェックを実行できませんでした。${describeFunctionError(error)}`);
+  }
+  if (data?.ok === false) {
+    throw new Error(data.error ?? '新刊チェックを実行できませんでした。');
+  }
+
+  return data ?? { checked: [] };
+}
+
+export async function getNewReleaseDiagnostics(userId: string) {
+  if (!supabase) throw new Error('Supabaseが設定されていません。');
+
+  const [subscriptions, tokenResult, logResult] = await Promise.all([
+    getNewReleaseSubscriptions(userId),
+    supabase
+      .from('push_tokens')
+      .select('expo_push_token')
+      .eq('user_id', userId)
+      .eq('enabled', true),
+    supabase
+      .from('notification_logs')
+      .select('series_title,volume_number,status,notification_title,created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(3),
+  ]);
+
+  if (tokenResult.error) throw new Error('通知トークンの状態を取得できませんでした。');
+  if (logResult.error) throw new Error('通知ログを取得できませんでした。');
+
+  const recentLogs = (logResult.data ?? []).map((row) => ({
+    createdAt: String(row.created_at),
+    notificationTitle: row.notification_title ? String(row.notification_title) : undefined,
+    seriesTitle: String(row.series_title),
+    status: String(row.status),
+    volumeNumber:
+      typeof row.volume_number === 'number' ? row.volume_number : undefined,
+  })) satisfies NewReleaseNotificationLog[];
+
+  return {
+    activePushTokenCount: tokenResult.data?.length ?? 0,
+    enabledSeriesCount: subscriptions.filter((subscription) => subscription.enabled).length,
+    recentLogs,
+    subscriptionCount: subscriptions.length,
+  };
+}
+
 export async function disableNewReleaseNotifications(userId: string) {
   if (!supabase) return;
 
@@ -172,10 +291,4 @@ export async function disableNewReleaseNotifications(userId: string) {
     .update({ enabled: false, last_seen_at: new Date().toISOString() })
     .eq('user_id', userId);
   if (tokenError) throw new Error('通知トークンを無効化できませんでした。');
-
-  const { error: subscriptionError } = await supabase
-    .from('series_subscriptions')
-    .update({ enabled: false, updated_at: new Date().toISOString() })
-    .eq('user_id', userId);
-  if (subscriptionError) throw new Error('新刊通知の購読を無効化できませんでした。');
 }

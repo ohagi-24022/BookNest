@@ -43,6 +43,28 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
 };
 
+function describeError(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  if (typeof error === 'object' && error !== null) {
+    const record = error as Record<string, unknown>;
+    const parts = [
+      record.message,
+      record.code ? `code: ${record.code}` : null,
+      record.details ? `details: ${record.details}` : null,
+      record.hint ? `hint: ${record.hint}` : null,
+    ].filter(Boolean);
+    if (parts.length > 0) return parts.join(' / ');
+
+    try {
+      return JSON.stringify(record);
+    } catch {
+      return Object.prototype.toString.call(error);
+    }
+  }
+  return String(error);
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -51,6 +73,17 @@ Deno.serve(async (request) => {
   try {
     const body = await safeJson(request);
     const limit = Number.isFinite(body.limit) ? Math.min(Math.max(body.limit, 1), 50) : 20;
+
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+      return jsonResponse(
+        {
+          checked: [],
+          error: 'SUPABASE_URL または SUPABASE_SERVICE_ROLE_KEY が Edge Function に設定されていません。',
+          ok: false,
+        },
+        200,
+      );
+    }
 
     const { data: subscriptions, error } = await supabase
       .from('series_subscriptions')
@@ -65,47 +98,59 @@ Deno.serve(async (request) => {
       latestVolume: number | null;
       notified: number;
       seriesTitle: string;
+      error?: string;
     }> = [];
 
     for (const subscription of (subscriptions ?? []) as SubscriptionRow[]) {
-      const latestVolume = await lookupLatestSeriesVolume(subscription.series_title);
-      await supabase.from('publication_checks').insert({
-        latest_volume: latestVolume,
-        series_key: subscription.series_key,
-        series_title: subscription.series_title,
-        source: latestVolume ? 'Rakuten Books' : null,
-      });
+      try {
+        const latestVolume = await lookupLatestSeriesVolume(subscription.series_title);
+        const { error: checkError } = await supabase.from('publication_checks').insert({
+          latest_volume: latestVolume,
+          series_key: subscription.series_key,
+          series_title: subscription.series_title,
+          source: latestVolume ? 'Rakuten Books' : null,
+        });
+        if (checkError) throw checkError;
 
-      if (!latestVolume || latestVolume <= (subscription.latest_known_volume ?? 0)) {
+        if (!latestVolume || latestVolume <= (subscription.latest_known_volume ?? 0)) {
+          checked.push({
+            latestVolume,
+            notified: 0,
+            seriesTitle: subscription.series_title,
+          });
+          continue;
+        }
+
+        const notified = await notifyUser(subscription, latestVolume);
+        const { error: updateError } = await supabase
+          .from('series_subscriptions')
+          .update({
+            latest_known_volume: latestVolume,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', subscription.id);
+        if (updateError) throw updateError;
+
         checked.push({
           latestVolume,
+          notified,
+          seriesTitle: subscription.series_title,
+        });
+      } catch (subscriptionError) {
+        checked.push({
+          error: describeError(subscriptionError),
+          latestVolume: null,
           notified: 0,
           seriesTitle: subscription.series_title,
         });
-        continue;
       }
-
-      const notified = await notifyUser(subscription, latestVolume);
-      await supabase
-        .from('series_subscriptions')
-        .update({
-          latest_known_volume: latestVolume,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', subscription.id);
-
-      checked.push({
-        latestVolume,
-        notified,
-        seriesTitle: subscription.series_title,
-      });
     }
 
-    return jsonResponse({ checked });
+    return jsonResponse({ checked, ok: true });
   } catch (error) {
     return jsonResponse(
-      { error: error instanceof Error ? error.message : 'Unknown error' },
-      500,
+      { checked: [], error: describeError(error), ok: false },
+      200,
     );
   }
 });

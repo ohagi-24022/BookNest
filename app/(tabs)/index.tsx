@@ -20,9 +20,15 @@ import {
   lookupLatestSeriesPublication,
   SeriesPublicationInfo,
 } from '../../src/lib/bookApis';
+import {
+  getNewReleaseSubscriptions,
+  setNewReleaseSeriesSubscription,
+  syncNewReleaseSubscriptions,
+} from '../../src/lib/newReleaseNotifications';
 import { getMissingVolumes, normalizeSeriesKey } from '../../src/lib/series';
 import { SeriesGroup } from '../../src/lib/seriesSelectors';
 import { useAppSettings } from '../../src/store/AppSettingsContext';
+import { useAuth } from '../../src/store/AuthContext';
 import { useLibrary } from '../../src/store/LibraryContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 import { Book, ReadingStatus } from '../../src/types';
@@ -126,9 +132,11 @@ export default function HomeScreen() {
   const { colors } = useAppTheme();
   const {
     favoriteSeriesKeys,
+    newReleaseNotifications,
     showPublishedLatestVolume,
     toggleFavoriteSeries,
   } = useAppSettings();
+  const { user } = useAuth();
   const { books, error, loading, requiresAuth, seriesGroups } = useLibrary();
   const [filter, setFilter] = useState<HomeFilter>('all');
   const [viewMode, setViewMode] = useState<'series' | 'books'>('series');
@@ -141,6 +149,8 @@ export default function HomeScreen() {
   const [toolbarHeight, setToolbarHeight] = useState(152);
   const [publicationCache, setPublicationCache] = useState<SeriesPublicationCache>({});
   const [refreshingSeriesTitle, setRefreshingSeriesTitle] = useState<string | null>(null);
+  const [notificationSeriesKeys, setNotificationSeriesKeys] = useState<string[]>([]);
+  const [updatingNotificationSeriesKey, setUpdatingNotificationSeriesKey] = useState<string | null>(null);
   const toolbarTranslateY = useRef(new Animated.Value(0)).current;
   const seriesListRef = useRef<FlatList<SeriesGroup>>(null);
   const booksListRef = useRef<FlatList<Book>>(null);
@@ -165,6 +175,39 @@ export default function HomeScreen() {
         console.warn('Failed to load series publication cache', cacheError);
       });
   }, []);
+
+  useEffect(() => {
+    if (!user || !newReleaseNotifications) {
+      setNotificationSeriesKeys([]);
+      return;
+    }
+
+    let cancelled = false;
+    syncNewReleaseSubscriptions(user.id, seriesGroups)
+      .then(() => getNewReleaseSubscriptions(user.id))
+      .then((subscriptions) => {
+        if (cancelled) return;
+        setNotificationSeriesKeys(
+          subscriptions
+            .filter((subscription) => subscription.enabled)
+            .map((subscription) => subscription.seriesKey),
+        );
+      })
+      .catch((notificationError) => {
+        if (cancelled) return;
+        Alert.alert(
+          '通知対象を読み込めませんでした',
+          notificationError instanceof Error
+            ? notificationError.message
+            : '通信状態を確認して、もう一度お試しください。',
+        );
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [newReleaseNotifications, seriesGroups, user]);
+
   const metadataFilterOptions = useMemo(() => {
     const authors = [...new Set(seriesGroups.flatMap((group) => group.authors))]
       .sort((left, right) => left.localeCompare(right))
@@ -442,6 +485,51 @@ export default function HomeScreen() {
     }
   };
 
+  const toggleSeriesNotification = async (group: SeriesGroup) => {
+    if (!newReleaseNotifications) {
+      Alert.alert(
+        '新刊通知がOFFです',
+        '設定画面で新刊通知をONにすると、シリーズごとに通知対象を選べます。',
+      );
+      return;
+    }
+    if (!user) {
+      Alert.alert('ログインが必要です', '新刊通知はログイン後に利用できます。');
+      return;
+    }
+
+    const seriesKey = normalizeSeriesKey(group.title);
+    const enabled = !notificationSeriesKeys.includes(seriesKey);
+    setUpdatingNotificationSeriesKey(seriesKey);
+    setNotificationSeriesKeys((current) =>
+      enabled ? [...new Set([...current, seriesKey])] : current.filter((key) => key !== seriesKey),
+    );
+
+    try {
+      await setNewReleaseSeriesSubscription(
+        user.id,
+        {
+          latestVolume: group.latestVolume,
+          seriesKey,
+          seriesTitle: group.title,
+        },
+        enabled,
+      );
+    } catch (notificationError) {
+      setNotificationSeriesKeys((current) =>
+        enabled ? current.filter((key) => key !== seriesKey) : [...new Set([...current, seriesKey])],
+      );
+      Alert.alert(
+        'シリーズ通知を更新できませんでした',
+        notificationError instanceof Error
+          ? notificationError.message
+          : '通信状態を確認して、もう一度お試しください。',
+      );
+    } finally {
+      setUpdatingNotificationSeriesKey(null);
+    }
+  };
+
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
       <HomeToolbar
@@ -472,7 +560,7 @@ export default function HomeScreen() {
           ref={seriesListRef}
           style={styles.list}
           data={visibleGroups}
-          extraData={`${listVersion}-${refreshingSeriesTitle}-${showPublishedLatestVolume}`}
+          extraData={`${listVersion}-${refreshingSeriesTitle}-${showPublishedLatestVolume}-${notificationSeriesKeys.join(',')}-${updatingNotificationSeriesKey}`}
           keyExtractor={(item) => item.id}
           contentContainerStyle={[styles.grid, { paddingTop: listTopPadding }]}
           showsVerticalScrollIndicator={false}
@@ -498,7 +586,11 @@ export default function HomeScreen() {
                 publicationInfo={publicationInfo}
                 refreshing={refreshingSeriesTitle === item.title}
                 refreshDisabled={refreshingSeriesTitle !== null}
+                notificationAvailable={Boolean(user && newReleaseNotifications)}
+                notificationEnabled={newReleaseNotifications && notificationSeriesKeys.includes(cacheKey)}
+                notificationUpdating={updatingNotificationSeriesKey === cacheKey}
                 onToggleFavorite={() => toggleFavoriteSeries(item.title)}
+                onToggleNotification={() => void toggleSeriesNotification(item)}
                 onRefresh={() => void refreshSeriesPublication(item.title, item.latestVolume)}
               />
             );
