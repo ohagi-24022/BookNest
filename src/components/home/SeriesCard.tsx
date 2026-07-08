@@ -7,6 +7,8 @@ import { SeriesGroup } from '../../lib/seriesSelectors';
 import { useAppTheme } from '../../store/ThemeContext';
 import { BookCover } from '../BookCover';
 
+const NOTIFICATION_ACTIVE_COLOR = '#ffcc00';
+
 type SeriesCardProps = {
   group: SeriesGroup;
   missingVolumes: number[];
@@ -101,7 +103,7 @@ export function SeriesCard({
                 }
               >
                 <Ionicons
-                  color={notificationEnabled ? colors.primary : colors.muted}
+                  color={notificationEnabled ? NOTIFICATION_ACTIVE_COLOR : colors.muted}
                   name={notificationEnabled ? 'notifications' : 'notifications-outline'}
                   size={18}
                 />
