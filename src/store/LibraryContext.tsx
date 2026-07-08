@@ -80,6 +80,7 @@ type LibraryContextValue = {
   findDuplicateBook: (book: BookInput) => Book | undefined;
   migrateLocalBooks: () => Promise<number>;
   updateBook: (bookId: string, updates: Partial<BookInput>) => Promise<void>;
+  renameSeries: (fromSeriesTitle: string, toSeriesTitle: string) => Promise<number>;
   deleteBook: (bookId: string) => Promise<void>;
   repairBookMetadata: (bookId: string) => Promise<MetadataRepairResult>;
   bulkUpdateStatus: (bookIds: string[], status: ReadingStatus) => Promise<void>;
@@ -251,7 +252,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
   const [loading, setLoading] = useState(configured);
   const [error, setError] = useState<string | null>(null);
   const enrichedIsbnsRef = useRef(new Set<string>());
-  const requiresAuth = configured && !user;
+  const requiresAuth = false;
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY)
@@ -259,24 +260,26 @@ export function LibraryProvider({ children }: PropsWithChildren) {
         if (!storedBooks) return;
         const parsedBooks = JSON.parse(storedBooks) as Book[];
         if (configured) {
-          setPendingLocalBooks(parsedBooks.filter((book) => !book.id.startsWith('demo-')));
+          const localBooks = parsedBooks.filter((book) => !book.id.startsWith('demo-'));
+          setPendingLocalBooks(localBooks);
+          if (!user) setBooks(localBooks);
         } else {
           setBooks(parsedBooks);
         }
       })
       .finally(() => setHydrated(true));
-  }, [configured]);
+  }, [configured, user]);
 
   useEffect(() => {
-    if (configured || !hydrated) return;
+    if ((configured && user) || !hydrated) return;
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(books));
-  }, [books, configured, hydrated]);
+  }, [books, configured, hydrated, user]);
 
   useEffect(() => {
     if (!configured || initializing) return;
     const client = supabase;
     if (!client || !user) {
-      setBooks([]);
+      setBooks(pendingLocalBooks);
       setLoading(false);
       return;
     }
@@ -305,7 +308,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
     }
 
     loadBooks(client);
-  }, [configured, initializing, user]);
+  }, [configured, initializing, pendingLocalBooks, user]);
 
   useEffect(() => {
     if (!configured || !user || !supabase) return;
@@ -393,7 +396,17 @@ export function LibraryProvider({ children }: PropsWithChildren) {
     }
 
     if (configured) {
-      if (!supabase || !user) throw new Error('ログインすると蔵書を登録できます。');
+      if (!supabase || !user) {
+        const book: Book = {
+          ...normalizedBookInput,
+          id: createId('book'),
+          userId: DEMO_USER_ID,
+          createdAt: now(),
+        };
+        setBooks((currentBooks) => [book, ...currentBooks]);
+        setPendingLocalBooks((currentBooks) => [book, ...currentBooks]);
+        return book;
+      }
       const bookId = createUuid();
 
       const { error: insertError } = await supabase
@@ -501,36 +514,81 @@ export function LibraryProvider({ children }: PropsWithChildren) {
     }
 
     if (configured) {
-      if (!supabase || !user) throw new Error('ログインすると蔵書を編集できます。');
-      const query = supabase.from('books').update(toBookUpdate(updates)).eq('user_id', user.id);
-      const { error: updateError } =
-        isUuid(bookId) || !book?.isbn ? await query.eq('id', bookId) : await query.eq('isbn', book.isbn);
+      if (supabase && user) {
+        const query = supabase.from('books').update(toBookUpdate(updates)).eq('user_id', user.id);
+        const { error: updateError } =
+          isUuid(bookId) || !book?.isbn ? await query.eq('id', bookId) : await query.eq('isbn', book.isbn);
 
-      if (updateError) {
-        throw new Error(formatSupabaseError(updateError, 'Supabaseの更新に失敗しました。'));
+        if (updateError) {
+          throw new Error(formatSupabaseError(updateError, 'Supabaseの更新に失敗しました。'));
+        }
       }
     }
 
     setBooks((currentBooks) =>
       currentBooks.map((book) => (book.id === bookId ? { ...book, ...updates } : book)),
     );
+    if (configured && !user) {
+      setPendingLocalBooks((currentBooks) =>
+        currentBooks.map((book) => (book.id === bookId ? { ...book, ...updates } : book)),
+      );
+    }
   }, [books, configured, user]);
 
   const deleteBook = useCallback(async (bookId: string) => {
     const book = books.find((candidate) => candidate.id === bookId);
 
     if (configured) {
-      if (!supabase || !user) throw new Error('ログインすると蔵書を削除できます。');
-      const query = supabase.from('books').delete().eq('user_id', user.id);
-      const { error: deleteError } =
-        isUuid(bookId) || !book?.isbn ? await query.eq('id', bookId) : await query.eq('isbn', book.isbn);
+      if (supabase && user) {
+        const query = supabase.from('books').delete().eq('user_id', user.id);
+        const { error: deleteError } =
+          isUuid(bookId) || !book?.isbn ? await query.eq('id', bookId) : await query.eq('isbn', book.isbn);
 
-      if (deleteError) {
-        throw new Error(formatSupabaseError(deleteError, 'Supabaseの削除に失敗しました。'));
+        if (deleteError) {
+          throw new Error(formatSupabaseError(deleteError, 'Supabaseの削除に失敗しました。'));
+        }
       }
     }
 
     setBooks((currentBooks) => currentBooks.filter((book) => book.id !== bookId));
+    if (configured && !user) {
+      setPendingLocalBooks((currentBooks) => currentBooks.filter((book) => book.id !== bookId));
+    }
+  }, [books, configured, user]);
+
+  const renameSeries = useCallback(async (fromSeriesTitle: string, toSeriesTitle: string) => {
+    const nextSeriesTitle = toSeriesTitle.trim();
+    if (!nextSeriesTitle) throw new Error('シリーズ名を入力してください。');
+    if (fromSeriesTitle === nextSeriesTitle) return 0;
+
+    const targetBooks = books.filter((book) => book.seriesTitle === fromSeriesTitle);
+    if (targetBooks.length === 0) throw new Error('対象のシリーズが見つかりません。');
+
+    if (configured && supabase && user) {
+      const { error: updateError } = await supabase
+        .from('books')
+        .update({ series_title: nextSeriesTitle })
+        .eq('user_id', user.id)
+        .eq('series_title', fromSeriesTitle);
+
+      if (updateError) {
+        throw new Error(formatSupabaseError(updateError, 'シリーズ名の更新に失敗しました。'));
+      }
+    }
+
+    setBooks((currentBooks) =>
+      currentBooks.map((book) =>
+        book.seriesTitle === fromSeriesTitle ? { ...book, seriesTitle: nextSeriesTitle } : book,
+      ),
+    );
+    if (configured && !user) {
+      setPendingLocalBooks((currentBooks) =>
+        currentBooks.map((book) =>
+          book.seriesTitle === fromSeriesTitle ? { ...book, seriesTitle: nextSeriesTitle } : book,
+        ),
+      );
+    }
+    return targetBooks.length;
   }, [books, configured, user]);
 
   const repairBookMetadata = useCallback(async (bookId: string) => {
@@ -572,15 +630,16 @@ export function LibraryProvider({ children }: PropsWithChildren) {
 
   const bulkUpdateStatus = useCallback(async (bookIds: string[], status: ReadingStatus) => {
     if (configured) {
-      if (!supabase || !user) throw new Error('ログインするとステータスを更新できます。');
-      const { error: updateError } = await supabase
-        .from('books')
-        .update({ status })
-        .in('id', bookIds)
-        .eq('user_id', user.id);
+      if (supabase && user) {
+        const { error: updateError } = await supabase
+          .from('books')
+          .update({ status })
+          .in('id', bookIds)
+          .eq('user_id', user.id);
 
-      if (updateError) {
-        throw new Error(formatSupabaseError(updateError, 'Supabaseの一括更新に失敗しました。'));
+        if (updateError) {
+          throw new Error(formatSupabaseError(updateError, 'Supabaseの一括更新に失敗しました。'));
+        }
       }
     }
 
@@ -588,6 +647,11 @@ export function LibraryProvider({ children }: PropsWithChildren) {
     setBooks((currentBooks) =>
       currentBooks.map((book) => (selected.has(book.id) ? { ...book, status } : book)),
     );
+    if (configured && !user) {
+      setPendingLocalBooks((currentBooks) =>
+        currentBooks.map((book) => (selected.has(book.id) ? { ...book, status } : book)),
+      );
+    }
   }, [configured, user]);
 
   const seriesGroups = useMemo(() => buildSeriesGroups(books), [books]);
@@ -610,6 +674,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
       findDuplicateBook,
       migrateLocalBooks,
       updateBook,
+      renameSeries,
       deleteBook,
       repairBookMetadata,
       bulkUpdateStatus,
@@ -628,6 +693,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
       migrateLocalBooks,
       pendingLocalBooks.length,
       repairBookMetadata,
+      renameSeries,
       requiresAuth,
       seriesGroups,
       updateBook,

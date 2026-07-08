@@ -1,10 +1,13 @@
 import { useScrollToTop } from '@react-navigation/native';
-import { useRef, useState } from 'react';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { Link } from 'expo-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Switch,
   Text,
@@ -13,6 +16,14 @@ import {
 } from 'react-native';
 
 import { envStatus } from '../../src/lib/env';
+import {
+  buildSeriesSubscriptions,
+  disableNewReleaseNotifications,
+  enableNewReleaseNotifications,
+  getNewReleaseSubscriptions,
+  setNewReleaseSeriesSubscription,
+  syncNewReleaseSubscriptions,
+} from '../../src/lib/newReleaseNotifications';
 import { useAppSettings } from '../../src/store/AppSettingsContext';
 import { useAuth } from '../../src/store/AuthContext';
 import { useLibrary } from '../../src/store/LibraryContext';
@@ -31,8 +42,10 @@ export default function SettingsScreen() {
   });
   useScrollToTop(tabScrollToTopRef);
   const { configured, initializing, user, signIn, signOut, signUp } = useAuth();
-  const { localImportCount, migrateLocalBooks } = useLibrary();
+  const { books, localImportCount, migrateLocalBooks, seriesGroups } = useLibrary();
   const {
+    newReleaseNotifications,
+    setNewReleaseNotifications,
     openExternalPurchaseLinks,
     setOpenExternalPurchaseLinks,
     showPublishedLatestVolume,
@@ -43,6 +56,37 @@ export default function SettingsScreen() {
   const [password, setPassword] = useState('');
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [migrationSubmitting, setMigrationSubmitting] = useState(false);
+  const [notificationSubmitting, setNotificationSubmitting] = useState(false);
+  const [subscriptionKeys, setSubscriptionKeys] = useState<string[]>([]);
+  const [subscriptionLoading, setSubscriptionLoading] = useState(false);
+  const seriesSubscriptionInputs = useMemo(
+    () => buildSeriesSubscriptions(seriesGroups),
+    [seriesGroups],
+  );
+
+  useEffect(() => {
+    if (!user || !newReleaseNotifications) {
+      setSubscriptionKeys([]);
+      return;
+    }
+
+    setSubscriptionLoading(true);
+    getNewReleaseSubscriptions(user.id)
+      .then((subscriptions) => {
+        setSubscriptionKeys(
+          subscriptions
+            .filter((subscription) => subscription.enabled)
+            .map((subscription) => subscription.seriesKey),
+        );
+      })
+      .catch((error) => {
+        Alert.alert(
+          '通知対象を読み込めませんでした',
+          error instanceof Error ? error.message : 'もう一度お試しください。',
+        );
+      })
+      .finally(() => setSubscriptionLoading(false));
+  }, [newReleaseNotifications, user]);
 
   const submitAuth = async (authMode: 'signIn' | 'signUp') => {
     if (!email.trim() || !password) {
@@ -86,6 +130,128 @@ export default function SettingsScreen() {
       Alert.alert('移行できませんでした', error instanceof Error ? error.message : 'もう一度お試しください。');
     } finally {
       setMigrationSubmitting(false);
+    }
+  };
+
+  const escapeCsvValue = (value?: string | number) => {
+    const text = value === undefined || value === null ? '' : String(value);
+    return `"${text.replace(/"/g, '""')}"`;
+  };
+
+  const exportCsv = async () => {
+    const header = [
+      'title',
+      'seriesTitle',
+      'volumeNumber',
+      'isbn',
+      'author',
+      'publisher',
+      'status',
+      'createdAt',
+    ];
+    const rows = books.map((book) =>
+      [
+        book.title,
+        book.seriesTitle,
+        book.volumeNumber,
+        book.isbn,
+        book.author,
+        book.publisher,
+        book.status,
+        book.createdAt,
+      ]
+        .map(escapeCsvValue)
+        .join(','),
+    );
+
+    await Share.share({
+      title: 'BookNest CSV Export',
+      message: [header.join(','), ...rows].join('\n'),
+    });
+  };
+
+  const exportJson = async () => {
+    await Share.share({
+      title: 'BookNest JSON Backup',
+      message: JSON.stringify({ exportedAt: new Date().toISOString(), books }, null, 2),
+    });
+  };
+
+  const toggleNewReleaseNotifications = async (enabled: boolean) => {
+    if (!user) {
+      Alert.alert(
+        'ログインが必要です',
+        '新刊通知はクラウド側でシリーズを定期確認するため、ログイン後に利用できます。',
+      );
+      return;
+    }
+
+    setNotificationSubmitting(true);
+    try {
+      if (enabled) {
+        const result = await enableNewReleaseNotifications(user.id, seriesGroups);
+        setSubscriptionKeys(seriesSubscriptionInputs.map((subscription) => subscription.seriesKey));
+        setNewReleaseNotifications(true);
+        Alert.alert(
+          '新刊通知を有効にしました',
+          `${result.subscriptionCount}シリーズを通知対象に登録しました。`,
+        );
+      } else {
+        await disableNewReleaseNotifications(user.id);
+        setSubscriptionKeys([]);
+        setNewReleaseNotifications(false);
+      }
+    } catch (error) {
+      Alert.alert(
+        '通知設定を更新できませんでした',
+        error instanceof Error ? error.message : 'もう一度お試しください。',
+      );
+    } finally {
+      setNotificationSubmitting(false);
+    }
+  };
+
+  const toggleSeriesSubscription = async (seriesKey: string, enabled: boolean) => {
+    if (!user) return;
+    const subscription = seriesSubscriptionInputs.find((item) => item.seriesKey === seriesKey);
+    if (!subscription) return;
+
+    setSubscriptionKeys((current) =>
+      enabled ? [...new Set([...current, seriesKey])] : current.filter((key) => key !== seriesKey),
+    );
+
+    try {
+      await setNewReleaseSeriesSubscription(user.id, subscription, enabled);
+    } catch (error) {
+      setSubscriptionKeys((current) =>
+        enabled ? current.filter((key) => key !== seriesKey) : [...new Set([...current, seriesKey])],
+      );
+      Alert.alert(
+        'シリーズ通知を更新できませんでした',
+        error instanceof Error ? error.message : 'もう一度お試しください。',
+      );
+    }
+  };
+
+  const syncNotificationSeries = async () => {
+    if (!user) return;
+    setSubscriptionLoading(true);
+    try {
+      await syncNewReleaseSubscriptions(user.id, seriesGroups);
+      const subscriptions = await getNewReleaseSubscriptions(user.id);
+      setSubscriptionKeys(
+        subscriptions
+          .filter((subscription) => subscription.enabled)
+          .map((subscription) => subscription.seriesKey),
+      );
+      Alert.alert('通知対象を同期しました', `${seriesGroups.length}シリーズを確認しました。`);
+    } catch (error) {
+      Alert.alert(
+        '通知対象を同期できませんでした',
+        error instanceof Error ? error.message : 'もう一度お試しください。',
+      );
+    } finally {
+      setSubscriptionLoading(false);
     }
   };
 
@@ -145,7 +311,7 @@ export default function SettingsScreen() {
             <Text style={[styles.rowTitle, { color: colors.text }]}>プロフィール</Text>
             <Text style={[styles.rowCopy, { color: colors.muted }]}>
               {configured
-                ? 'Supabase Auth にログインすると蔵書がクラウド保存されます。'
+                ? 'ログインしなくても端末内に保存できます。アカウント作成後にクラウドへ移行できます。'
                 : 'Supabase の環境変数を追加すると認証が有効になります。'}
             </Text>
             <TextInput
@@ -197,18 +363,86 @@ export default function SettingsScreen() {
 
       <View style={[styles.section, { borderBottomColor: colors.border }]}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>連携設定</Text>
+        {__DEV__ ? (
+          <View style={[styles.pendingBox, { backgroundColor: colors.elevated }]}>
+            <Text style={[styles.rowTitle, { color: colors.text }]}>デバッグ情報</Text>
+            <Text style={[styles.rowCopy, { color: colors.muted }]}>
+              Supabase URL: {envStatus.hasSupabaseUrl ? '設定済み' : '未設定'}
+            </Text>
+            <Text style={[styles.rowCopy, { color: colors.muted }]}>
+              Supabase Anon Key: {envStatus.hasSupabaseAnonKey ? '設定済み' : '未設定'}
+            </Text>
+            <Text style={[styles.rowCopy, { color: colors.muted }]}>
+              Google Books API Key: {envStatus.hasGoogleBooksApiKey ? '設定済み' : '未設定'}
+            </Text>
+            <Text style={[styles.rowCopy, { color: colors.muted }]}>
+              Rakuten App ID: {envStatus.hasRakutenAppId ? '設定済み' : '未設定'}
+            </Text>
+          </View>
+        ) : (
+          <Text style={[styles.rowCopy, { color: colors.muted }]}>
+            外部サービス連携はアプリ内部で管理されています。
+          </Text>
+        )}
+      </View>
+
+      <View style={[styles.section, { borderBottomColor: colors.border }]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>バックアップ</Text>
         <Text style={[styles.rowCopy, { color: colors.muted }]}>
-          Supabase URL: {envStatus.hasSupabaseUrl ? '設定済み' : '未設定'}
+          蔵書データをCSVまたはJSONとして共有できます。機種変更前や手元の控えに使えます。
         </Text>
-        <Text style={[styles.rowCopy, { color: colors.muted }]}>
-          Supabase Anon Key: {envStatus.hasSupabaseAnonKey ? '設定済み' : '未設定'}
-        </Text>
-        <Text style={[styles.rowCopy, { color: colors.muted }]}>
-          Google Books API Key: {envStatus.hasGoogleBooksApiKey ? '設定済み' : '未設定'}
-        </Text>
-        <Text style={[styles.rowCopy, { color: colors.muted }]}>
-          Rakuten App ID: {envStatus.hasRakutenAppId ? '設定済み' : '未設定'}
-        </Text>
+        <View style={styles.authButtons}>
+          <Pressable
+            disabled={books.length === 0}
+            onPress={() => void exportCsv()}
+            style={[
+              styles.neutralButton,
+              styles.authButton,
+              { borderColor: colors.border },
+              books.length === 0 && styles.disabledButton,
+            ]}
+          >
+            <Text style={[styles.neutralButtonText, { color: colors.text }]}>CSV出力</Text>
+          </Pressable>
+          <Pressable
+            disabled={books.length === 0}
+            onPress={() => void exportJson()}
+            style={[
+              styles.neutralButton,
+              styles.authButton,
+              { borderColor: colors.border },
+              books.length === 0 && styles.disabledButton,
+            ]}
+          >
+            <Text style={[styles.neutralButtonText, { color: colors.text }]}>JSON出力</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      <View style={[styles.section, { borderBottomColor: colors.border }]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>ヘルプ</Text>
+        <Link href="/help" asChild>
+          <Pressable
+            style={[
+              styles.helpLink,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.border,
+              },
+            ]}
+          >
+            <View style={styles.rowText}>
+              <View style={styles.helpTitleRow}>
+                <Text style={[styles.rowTitle, { color: colors.text }]}>BookNestの使い方</Text>
+                <Ionicons color={colors.muted} name="help-circle-outline" size={17} />
+              </View>
+              <Text style={[styles.helpCopy, { color: colors.muted }]} numberOfLines={2}>
+                登録、本棚、シリーズ編集などの操作を確認できます。
+              </Text>
+            </View>
+            <Text style={[styles.helpArrow, { color: colors.muted }]}>›</Text>
+          </Pressable>
+        </Link>
       </View>
 
       <View style={[styles.section, { borderBottomColor: colors.border }]}>
@@ -231,14 +465,66 @@ export default function SettingsScreen() {
 
       <View style={[styles.section, { borderBottomColor: colors.border }]}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>通知</Text>
-        <View style={[styles.pendingBox, { backgroundColor: colors.elevated }]}>
+        <View style={styles.row}>
           <View style={styles.rowText}>
             <Text style={[styles.rowTitle, { color: colors.text }]}>新刊通知</Text>
             <Text style={[styles.rowCopy, { color: colors.muted }]}>
-              Push Token保存と通知済み管理が必要なため、今は準備中にしています。
+              所持シリーズに新刊が見つかった時に通知します。ログイン中のみ利用できます。
             </Text>
           </View>
+          <Switch
+            disabled={notificationSubmitting || !configured}
+            onValueChange={(value) => void toggleNewReleaseNotifications(value)}
+            thumbColor="#ffffff"
+            trackColor={{ false: '#d4d4d4', true: '#31c759' }}
+            value={newReleaseNotifications}
+          />
         </View>
+        <Text style={[styles.rowCopy, { color: colors.muted }]}>
+          {user
+            ? `${seriesGroups.length}シリーズを通知対象として同期します。`
+            : 'ログイン後にONにすると、端末とシリーズ情報を通知用に登録します。'}
+        </Text>
+        {newReleaseNotifications && user && (
+          <View style={[styles.notificationSeriesBox, { backgroundColor: colors.elevated }]}>
+            <View style={styles.notificationHeader}>
+              <Text style={[styles.rowTitle, { color: colors.text }]}>通知するシリーズ</Text>
+              <Pressable
+                disabled={subscriptionLoading}
+                onPress={() => void syncNotificationSeries()}
+                style={[styles.syncButton, { borderColor: colors.border }, subscriptionLoading && styles.disabledButton]}
+              >
+                <Text style={[styles.syncButtonText, { color: colors.text }]}>
+                  {subscriptionLoading ? '同期中' : '同期'}
+                </Text>
+              </Pressable>
+            </View>
+            {seriesSubscriptionInputs.length === 0 ? (
+              <Text style={[styles.rowCopy, { color: colors.muted }]}>
+                本棚にシリーズが追加されると選択できます。
+              </Text>
+            ) : (
+              seriesSubscriptionInputs.map((series) => (
+                <View key={series.seriesKey} style={styles.notificationSeriesRow}>
+                  <View style={styles.rowText}>
+                    <Text style={[styles.seriesTitleText, { color: colors.text }]} numberOfLines={1}>
+                      {series.seriesTitle}
+                    </Text>
+                    <Text style={[styles.rowCopy, { color: colors.muted }]}>
+                      {series.latestVolume ? `${series.latestVolume}巻まで所持` : '所持巻数未設定'}
+                    </Text>
+                  </View>
+                  <Switch
+                    onValueChange={(value) => void toggleSeriesSubscription(series.seriesKey, value)}
+                    thumbColor="#ffffff"
+                    trackColor={{ false: '#d4d4d4', true: '#31c759' }}
+                    value={subscriptionKeys.includes(series.seriesKey)}
+                  />
+                </View>
+              ))
+            )}
+          </View>
+        )}
       </View>
 
       <View style={[styles.section, { borderBottomColor: colors.border }]}>
@@ -317,6 +603,40 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
   },
+  notificationSeriesBox: {
+    borderRadius: 8,
+    gap: 8,
+    marginTop: 12,
+    padding: 12,
+  },
+  notificationHeader: { alignItems: 'center', flexDirection: 'row', gap: 10 },
+  notificationSeriesRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 52,
+  },
+  seriesTitleText: { fontSize: 14, fontWeight: '800' },
+  syncButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 34,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  syncButtonText: { fontSize: 12, fontWeight: '800' },
+  helpLink: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    padding: 12,
+  },
+  helpTitleRow: { alignItems: 'center', flexDirection: 'row', gap: 6 },
+  helpArrow: { fontSize: 28, fontWeight: '300' },
+  helpCopy: { fontSize: 13, lineHeight: 18, marginTop: 3 },
   segmented: {
     borderRadius: 8,
     flexDirection: 'row',

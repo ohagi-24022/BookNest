@@ -35,7 +35,7 @@ export default function SeriesScreen() {
   const navigation = useNavigation();
   const router = useRouter();
   const seriesTitle = decodeURIComponent(params.title ?? '');
-  const { addBook, getSeriesItems, bulkUpdateStatus, updateBook, deleteBook, repairBookMetadata } =
+  const { addBook, getSeriesItems, bulkUpdateStatus, updateBook, renameSeries, deleteBook, repairBookMetadata } =
     useLibrary();
   const {
     isFavoriteSeries,
@@ -48,9 +48,13 @@ export default function SeriesScreen() {
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [draftSeries, setDraftSeries] = useState('');
   const [draftVolume, setDraftVolume] = useState('');
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [draftSeriesTitle, setDraftSeriesTitle] = useState(seriesTitle);
 
   const items = useMemo(() => getSeriesItems(seriesTitle), [getSeriesItems, seriesTitle]);
+  const ownedItems = useMemo(() => items.filter(isOwnedBook), [items]);
   const selectedCount = selectedIds.length;
+  const allSelected = ownedItems.length > 0 && selectedCount === ownedItems.length;
   const favorite = isFavoriteSeries(seriesTitle);
 
   useLayoutEffect(() => {
@@ -123,6 +127,10 @@ export default function SeriesScreen() {
     }
   };
 
+  const toggleAllSelected = () => {
+    setSelectedIds(allSelected ? [] : ownedItems.map((book) => book.id));
+  };
+
   const startEditing = (book: Book) => {
     setEditingId(book.id);
     setDraftSeries(book.seriesTitle);
@@ -138,6 +146,20 @@ export default function SeriesScreen() {
       setEditingId(null);
     } catch (error) {
       Alert.alert('BookNest', error instanceof Error ? error.message : '保存に失敗しました。');
+    }
+  };
+
+  const submitSeriesRename = async () => {
+    try {
+      const updatedCount = await renameSeries(seriesTitle, draftSeriesTitle);
+      setRenameOpen(false);
+      Alert.alert(
+        'シリーズ名を更新しました',
+        `${updatedCount}冊を「${draftSeriesTitle.trim()}」へ移しました。`,
+      );
+      router.replace(`/series/${encodeURIComponent(draftSeriesTitle.trim())}`);
+    } catch (error) {
+      Alert.alert('BookNest', error instanceof Error ? error.message : 'シリーズ名の更新に失敗しました。');
     }
   };
 
@@ -166,6 +188,13 @@ export default function SeriesScreen() {
       const result = await repairBookMetadata(book.id);
       const beforeCover = result.beforeThumbnailUrl ? 'あり' : 'なし';
       const afterCover = result.afterThumbnailUrl ? 'あり' : 'なし';
+      if (!__DEV__) {
+        Alert.alert(
+          '書籍情報を更新しました',
+          `表紙: ${beforeCover} → ${afterCover}\n出版社: ${result.publisher ?? '未取得'}`,
+        );
+        return;
+      }
       Alert.alert(
         '再取得デバッグ',
         [
@@ -209,20 +238,84 @@ export default function SeriesScreen() {
       <View style={[styles.bulkBar, { borderBottomColor: colors.border }]}>
         <Text style={[styles.bulkText, { color: colors.muted }]}>{selectedCount} 冊選択中</Text>
         <Pressable
-          disabled={selectedCount === 0}
-          onPress={() => updateSelected('unread')}
-          style={[styles.bulkButton, { backgroundColor: colors.text }, selectedCount === 0 && styles.disabledButton]}
+          onPress={() => {
+            setDraftSeriesTitle(seriesTitle);
+            setRenameOpen((current) => !current);
+          }}
+          style={[styles.bulkButton, { borderColor: colors.border, borderWidth: 1 }]}
         >
-          <Text style={[styles.bulkButtonText, { color: colors.background }]}>積読に戻す</Text>
+          <Text style={[styles.bulkButtonText, { color: colors.text }]}>シリーズ名変更</Text>
         </Pressable>
         <Pressable
-          disabled={selectedCount === 0}
-          onPress={() => updateSelected('read')}
-          style={[styles.bulkButton, { backgroundColor: colors.success }, selectedCount === 0 && styles.disabledButton]}
+          disabled={ownedItems.length === 0}
+          onPress={toggleAllSelected}
+          style={[styles.bulkButton, { borderColor: colors.border, borderWidth: 1 }, ownedItems.length === 0 && styles.disabledButton]}
         >
-          <Text style={styles.bulkButtonText}>読了にする</Text>
+          <Text style={[styles.bulkButtonText, { color: colors.text }]}>
+            {allSelected ? '全解除' : '全選択'}
+          </Text>
         </Pressable>
       </View>
+      <View style={[styles.statusSlot, { borderBottomColor: colors.border }]}>
+        {selectedCount > 0 ? (
+          <View
+            style={[
+              styles.statusBar,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.border,
+                shadowColor: '#000000',
+              },
+            ]}
+          >
+            <Pressable
+              onPress={() => updateSelected('unread')}
+              style={[styles.statusButton, { borderColor: colors.border }]}
+            >
+              <Text style={[styles.statusButtonText, { color: colors.text }]}>未読にする</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => updateSelected('reading')}
+              style={[styles.statusButton, { borderColor: colors.border }]}
+            >
+              <Text style={[styles.statusButtonText, { color: colors.text }]}>読書中にする</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => updateSelected('read')}
+              style={[styles.statusButton, { backgroundColor: colors.success, borderColor: colors.success }]}
+            >
+              <Text style={styles.statusButtonText}>読了にする</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <Text style={[styles.statusHint, { color: colors.muted }]}>
+            本を選択するとステータスをまとめて変更できます
+          </Text>
+        )}
+      </View>
+      {renameOpen && (
+        <View style={[styles.renameBox, { borderBottomColor: colors.border }]}>
+          <Text style={[styles.rowTitle, { color: colors.text }]}>シリーズ名の一括変更</Text>
+          <Text style={[styles.renameCopy, { color: colors.muted }]}>
+            既存のシリーズ名を入力すると、そのシリーズへ統合します。
+          </Text>
+          <View style={styles.renameRow}>
+            <TextInput
+              value={draftSeriesTitle}
+              onChangeText={setDraftSeriesTitle}
+              placeholder="シリーズ名"
+              placeholderTextColor={colors.muted}
+              style={[styles.renameInput, { backgroundColor: colors.input, color: colors.text }]}
+            />
+            <Pressable
+              onPress={() => void submitSeriesRename()}
+              style={[styles.saveButton, styles.renameSaveButton, { backgroundColor: colors.text }]}
+            >
+              <Text style={[styles.saveButtonText, { color: colors.background }]}>反映</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
 
       <FlatList
         data={items}
@@ -233,7 +326,8 @@ export default function SeriesScreen() {
           const missing = item.isMissing;
 
           return (
-            <View
+            <Pressable
+              onPress={() => (missing ? void addMissingAsOwned(item) : toggleSelected(item))}
               style={[
                 styles.row,
                 { backgroundColor: missing ? colors.elevated : colors.surface, borderColor: colors.border },
@@ -241,59 +335,66 @@ export default function SeriesScreen() {
               ]}
             >
               <Pressable
-                onPress={() => (missing ? void addMissingAsOwned(item) : toggleSelected(item))}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  if (missing) void addMissingAsOwned(item);
+                  else toggleSelected(item);
+                }}
                 style={[styles.checkbox, { borderColor: colors.border }]}
               >
                 <Text style={[styles.checkboxText, { color: colors.text }]}>{selected ? '✓' : missing ? '+' : ''}</Text>
               </Pressable>
-              <Pressable
-                disabled={missing}
-                onPress={() => isOwnedBook(item) && router.push(`/book/${encodeURIComponent(item.id)}`)}
-              >
-                <BookCover
-                  thumbnailUrl={item.thumbnailUrl}
-                  isbn={isOwnedBook(item) ? item.isbn : undefined}
-                  style={styles.cover}
-                  missing={missing}
-                  placeholderText={`No.${item.volumeNumber ?? '-'}`}
-                />
-              </Pressable>
+              <BookCover
+                thumbnailUrl={item.thumbnailUrl}
+                isbn={isOwnedBook(item) ? item.isbn : undefined}
+                style={styles.cover}
+                missing={missing}
+                placeholderText={`No.${item.volumeNumber ?? '-'}`}
+              />
               <View style={styles.rowBody}>
-                <Pressable
-                  onPress={() =>
-                    isOwnedBook(item) &&
-                    editingId !== item.id &&
-                    router.push(`/book/${encodeURIComponent(item.id)}`)
-                  }
-                  onLongPress={() => isOwnedBook(item) && startEditing(item)}
-                >
+                <View>
                   <Text
                     style={[styles.bookTitle, { color: missing ? colors.muted : colors.text }]}
                     numberOfLines={2}
                   >
                     {item.title}
                   </Text>
-                  <Text style={[styles.meta, { color: colors.muted }]}>
-                    {item.volumeNumber ? `${item.volumeNumber}巻` : '巻数なし'} /{' '}
-                    {missing ? '未所持' : statusLabels[item.status]}
-                  </Text>
+                  <View style={styles.metaRow}>
+                    <Text style={[styles.meta, { color: colors.muted }]}>
+                      {item.volumeNumber ? `${item.volumeNumber}巻` : '巻数なし'}
+                      {missing ? ' / 未所持' : ''}
+                    </Text>
+                    {isOwnedBook(item) && (
+                      <View style={[styles.statusPill, { backgroundColor: colors.elevated }]}>
+                        <Text style={[styles.statusPillText, { color: colors.text }]}>
+                          {statusLabels[item.status]}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
                   {isOwnedBook(item) && (item.author || item.publisher) && (
                     <Text style={[styles.credits, { color: colors.muted }]} numberOfLines={2}>
                       {[item.author, item.publisher].filter(Boolean).join(' / ')}
                     </Text>
                   )}
-                </Pressable>
+                </View>
                 {missing && (
                   <View style={styles.actionRow}>
                     <Pressable
-                      onPress={() => void openPurchaseCandidates(item)}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        void openPurchaseCandidates(item);
+                      }}
                       style={[styles.smallButton, { borderColor: colors.primary }]}
                     >
                       <Text style={[styles.smallButtonText, { color: colors.primary }]}>購入候補</Text>
                     </Pressable>
                     <Pressable
                       disabled={refreshingId === item.id}
-                      onPress={() => void addMissingAsOwned(item)}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        void addMissingAsOwned(item);
+                      }}
                       style={[
                         styles.smallButton,
                         { backgroundColor: colors.text, borderColor: colors.text },
@@ -307,7 +408,10 @@ export default function SeriesScreen() {
                   </View>
                 )}
                 {isOwnedBook(item) && editingId === item.id && (
-                  <View style={styles.editBox}>
+                  <Pressable
+                    onPress={(event) => event.stopPropagation()}
+                    style={styles.editBox}
+                  >
                     <TextInput
                       value={draftSeries}
                       onChangeText={setDraftSeries}
@@ -326,13 +430,25 @@ export default function SeriesScreen() {
                     <Pressable onPress={() => submitEdit(item)} style={[styles.saveButton, { backgroundColor: colors.text }]}>
                       <Text style={[styles.saveButtonText, { color: colors.background }]}>保存</Text>
                     </Pressable>
-                  </View>
+                  </Pressable>
                 )}
                 {isOwnedBook(item) && (
                   <View style={styles.actionRow}>
                     <Pressable
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        router.push(`/book/${encodeURIComponent(item.id)}`);
+                      }}
+                      style={[styles.smallButton, { borderColor: colors.primary }]}
+                    >
+                      <Text style={[styles.smallButtonText, { color: colors.primary }]}>詳細を見る</Text>
+                    </Pressable>
+                    <Pressable
                       disabled={refreshingId === item.id}
-                      onPress={() => refreshMetadata(item)}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        refreshMetadata(item);
+                      }}
                       style={[
                         styles.smallButton,
                         { borderColor: colors.border },
@@ -344,7 +460,10 @@ export default function SeriesScreen() {
                       </Text>
                     </Pressable>
                     <Pressable
-                      onPress={() => confirmDelete(item)}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        confirmDelete(item);
+                      }}
                       style={[styles.smallButton, { borderColor: colors.danger }]}
                     >
                       <Text style={[styles.smallButtonText, { color: colors.danger }]}>削除</Text>
@@ -352,7 +471,7 @@ export default function SeriesScreen() {
                   </View>
                 )}
               </View>
-            </View>
+            </Pressable>
           );
         }}
       />
@@ -378,7 +497,47 @@ const styles = StyleSheet.create({
   },
   disabledButton: { opacity: 0.35 },
   bulkButtonText: { color: '#ffffff', fontSize: 12, fontWeight: '800' },
-  list: { padding: 14 },
+  statusSlot: {
+    borderBottomWidth: 1,
+    minHeight: 58,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  statusHint: { fontSize: 12, fontWeight: '700', textAlign: 'center' },
+  statusBar: {
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    shadowOffset: { height: 3, width: 0 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+  },
+  statusButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    flex: 1,
+    height: 36,
+    justifyContent: 'center',
+  },
+  statusButtonText: { color: '#ffffff', fontSize: 12, fontWeight: '800' },
+  renameBox: { borderBottomWidth: 1, gap: 8, padding: 12 },
+  rowTitle: { fontSize: 14, fontWeight: '800' },
+  renameCopy: { fontSize: 12, lineHeight: 17 },
+  renameRow: { flexDirection: 'row', gap: 8 },
+  renameInput: {
+    borderRadius: 8,
+    flex: 1,
+    fontSize: 15,
+    height: 40,
+    paddingHorizontal: 10,
+  },
+  renameSaveButton: { height: 40, marginTop: 0, paddingHorizontal: 16 },
+  list: { padding: 14, paddingBottom: 28 },
   row: {
     alignItems: 'center',
     borderRadius: 8,
@@ -404,6 +563,14 @@ const styles = StyleSheet.create({
   rowBody: { flex: 1 },
   bookTitle: { fontSize: 16, fontWeight: '800', lineHeight: 21 },
   meta: { fontSize: 13, marginTop: 6 },
+  metaRow: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  statusPill: {
+    borderRadius: 999,
+    marginTop: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  statusPillText: { fontSize: 11, fontWeight: '800' },
   credits: { fontSize: 12, lineHeight: 17, marginTop: 4 },
   editBox: { gap: 8, marginTop: 10 },
   editInput: {

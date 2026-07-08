@@ -294,15 +294,14 @@ function bookToDebugEntry(provider: string, query: string, book: BookInput | nul
 
 function getRakutenConfigDebugEntry(query: string): BookLookupDebugEntry {
   const appId = env.rakutenAppId ?? '';
-  const accessKey = env.rakutenAccessKey ?? '';
 
   return {
     provider: 'Rakuten Config',
     query,
-    status: appId && accessKey ? 'hit' : 'error',
+    status: supabase ? 'hit' : 'error',
     reason: [
       `APP ID: ${appId ? `${appId.length}文字` : 'なし'}`,
-      `Access Key: ${accessKey ? `${accessKey.length}文字` : 'なし'}`,
+      `Edge Function: ${supabase ? '利用可' : '未設定'}`,
     ]
       .filter(Boolean)
       .join(' / '),
@@ -410,13 +409,9 @@ async function lookupRakutenBooks(
   params: { isbn?: string; title?: string },
   expected?: ExpectedBook,
 ): Promise<BookInput | null> {
-  if (!env.rakutenAppId || !env.rakutenAccessKey) return null;
+  if (!supabase) return null;
 
-  const searchParams = new URLSearchParams({
-    applicationId: env.rakutenAppId,
-    accessKey: env.rakutenAccessKey,
-    format: 'json',
-  });
+  const searchParams = new URLSearchParams();
   if (params.isbn) searchParams.set('isbn', normalizeIsbn(params.isbn));
   if (params.title) searchParams.set('title', params.title);
 
@@ -436,14 +431,9 @@ async function lookupRakutenBooks(
 }
 
 async function lookupRakutenBooksTotal(keyword: string, expected?: ExpectedBook): Promise<BookInput | null> {
-  if (!env.rakutenAppId || !env.rakutenAccessKey || !keyword.trim()) return null;
+  if (!supabase || !keyword.trim()) return null;
 
-  const searchParams = new URLSearchParams({
-    applicationId: env.rakutenAppId,
-    accessKey: env.rakutenAccessKey,
-    format: 'json',
-    keyword,
-  });
+  const searchParams = new URLSearchParams({ keyword });
 
   const path = 'BooksTotal/Search/20170404';
   const response = await fetchRakutenWithTimeout(
@@ -482,12 +472,9 @@ function findLatestVolumeFromTitles(titles: Array<string | undefined>, seriesTit
 }
 
 async function lookupLatestRakutenSeriesVolume(seriesTitle: string) {
-  if (!env.rakutenAppId || !env.rakutenAccessKey) return null;
+  if (!supabase) return null;
 
   const searchParams = new URLSearchParams({
-    applicationId: env.rakutenAppId,
-    accessKey: env.rakutenAccessKey,
-    format: 'json',
     title: seriesTitle,
     hits: '30',
     sort: '-releaseDate',
@@ -746,13 +733,9 @@ async function lookupOpenBdVolumeDetails(
 async function lookupRakutenBookVolumeDetails(
   book: Pick<Book, 'isbn' | 'title' | 'seriesTitle' | 'volumeNumber'>,
 ): Promise<BookVolumeDetails | null> {
-  if (!env.rakutenAppId || !env.rakutenAccessKey) return null;
+  if (!supabase) return null;
 
-  const searchParams = new URLSearchParams({
-    applicationId: env.rakutenAppId,
-    accessKey: env.rakutenAccessKey,
-    format: 'json',
-  });
+  const searchParams = new URLSearchParams();
   if (book.isbn) searchParams.set('isbn', normalizeIsbn(book.isbn));
   else searchParams.set('title', book.title);
 
@@ -922,24 +905,13 @@ async function debugRakutenTitleCandidates(
   query: string,
   expected: ExpectedBook,
 ): Promise<BookLookupDebugEntry[]> {
-  if (!env.rakutenAppId) {
+  if (!supabase) {
     return [
       {
         provider: 'Rakuten Title',
         query,
         status: 'miss',
-        reason: '楽天APP IDなし',
-      },
-    ];
-  }
-
-  if (!env.rakutenAccessKey) {
-    return [
-      {
-        provider: 'Rakuten Title',
-        query,
-        status: 'miss',
-        reason: '楽天Access Keyなし',
+        reason: 'Supabase Edge Function未設定',
       },
     ];
   }
@@ -956,11 +928,7 @@ async function debugRakutenEndpoint(
   expected: ExpectedBook,
 ): Promise<BookLookupDebugEntry[]> {
   try {
-    const searchParams = new URLSearchParams({
-      applicationId: env.rakutenAppId ?? '',
-      accessKey: env.rakutenAccessKey ?? '',
-      format: 'json',
-    });
+    const searchParams = new URLSearchParams();
     searchParams.set(queryParamName, query);
     const path =
       queryParamName === 'title'

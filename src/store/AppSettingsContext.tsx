@@ -14,12 +14,14 @@ const STORAGE_KEY = 'booknest.app-settings.v1';
 
 type AppSettings = {
   favoriteSeriesKeys: string[];
+  newReleaseNotifications: boolean;
   openExternalPurchaseLinks: boolean;
   showPublishedLatestVolume: boolean;
 };
 
 type AppSettingsContextValue = AppSettings & {
   isFavoriteSeries: (seriesTitle: string) => boolean;
+  setNewReleaseNotifications: (value: boolean) => void;
   setOpenExternalPurchaseLinks: (value: boolean) => void;
   setShowPublishedLatestVolume: (value: boolean) => void;
   toggleFavoriteSeries: (seriesTitle: string) => void;
@@ -27,6 +29,7 @@ type AppSettingsContextValue = AppSettings & {
 
 const defaultSettings: AppSettings = {
   favoriteSeriesKeys: [],
+  newReleaseNotifications: false,
   openExternalPurchaseLinks: false,
   showPublishedLatestVolume: false,
 };
@@ -64,6 +67,8 @@ export function AppSettingsProvider({ children }: PropsWithChildren) {
       ...settings,
       isFavoriteSeries: (seriesTitle: string) =>
         settings.favoriteSeriesKeys.includes(normalizeSeriesKey(seriesTitle)),
+      setNewReleaseNotifications: (newReleaseNotifications: boolean) =>
+        setSettings((current) => ({ ...current, newReleaseNotifications })),
       setOpenExternalPurchaseLinks: (openExternalPurchaseLinks: boolean) =>
         setSettings((current) => ({ ...current, openExternalPurchaseLinks })),
       setShowPublishedLatestVolume: (showPublishedLatestVolume: boolean) =>

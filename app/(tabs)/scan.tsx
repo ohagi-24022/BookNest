@@ -44,7 +44,7 @@ export default function ScanScreen() {
   });
   useScrollToTop(tabScrollToTopRef);
   const [permission, requestPermission] = useCameraPermissions();
-  const { addBook, findDuplicateBook } = useLibrary();
+  const { addBook, deleteBook, findDuplicateBook } = useLibrary();
   const { colors } = useAppTheme();
   const [isScanning, setIsScanning] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -120,6 +120,25 @@ export default function ScanScreen() {
       resetForm();
       setNotice({ tone: 'success', message: `${book.title} を追加しました。` });
       router.replace('/');
+      Alert.alert('追加しました', `${book.title} を本棚に追加しました。`, [
+        {
+          text: '取り消す',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteBook(book.id);
+              setNotice({ tone: 'neutral', message: `${book.title} の追加を取り消しました。` });
+            } catch (error) {
+              Alert.alert('取り消せませんでした', error instanceof Error ? error.message : 'もう一度お試しください。');
+            }
+          },
+        },
+        {
+          text: '詳細を見る',
+          onPress: () => router.replace(`/book/${encodeURIComponent(book.id)}`),
+        },
+        { text: 'OK' },
+      ]);
     } catch (error) {
       setNotice({
         tone: 'error',

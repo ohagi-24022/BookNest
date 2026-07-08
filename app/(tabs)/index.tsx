@@ -7,7 +7,6 @@ import {
   FlatList,
   NativeScrollEvent,
   NativeSyntheticEvent,
-  ScrollView,
   StyleSheet,
   View,
 } from 'react-native';
@@ -22,6 +21,7 @@ import {
   SeriesPublicationInfo,
 } from '../../src/lib/bookApis';
 import { getMissingVolumes, normalizeSeriesKey } from '../../src/lib/series';
+import { SeriesGroup } from '../../src/lib/seriesSelectors';
 import { useAppSettings } from '../../src/store/AppSettingsContext';
 import { useLibrary } from '../../src/store/LibraryContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
@@ -111,6 +111,17 @@ function getMetadataFilter(filter: HomeFilter) {
   return null;
 }
 
+function getTrailingUnownedVolumes(ownedLatestVolume?: number, publishedLatestVolume?: number) {
+  if (!ownedLatestVolume || !publishedLatestVolume || publishedLatestVolume <= ownedLatestVolume) {
+    return [];
+  }
+
+  return Array.from(
+    { length: publishedLatestVolume - ownedLatestVolume },
+    (_, index) => ownedLatestVolume + index + 1,
+  );
+}
+
 export default function HomeScreen() {
   const { colors } = useAppTheme();
   const {
@@ -131,7 +142,7 @@ export default function HomeScreen() {
   const [publicationCache, setPublicationCache] = useState<SeriesPublicationCache>({});
   const [refreshingSeriesTitle, setRefreshingSeriesTitle] = useState<string | null>(null);
   const toolbarTranslateY = useRef(new Animated.Value(0)).current;
-  const seriesScrollRef = useRef<ScrollView>(null);
+  const seriesListRef = useRef<FlatList<SeriesGroup>>(null);
   const booksListRef = useRef<FlatList<Book>>(null);
   const activeViewModeRef = useRef(viewMode);
   const tabScrollToTopRef = useRef({ scrollToTop: () => {} });
@@ -350,7 +361,7 @@ export default function HomeScreen() {
     lastScrollYRef.current = 0;
     directionDistanceRef.current = 0;
     if (activeViewModeRef.current === 'series') {
-      seriesScrollRef.current?.scrollTo({ y: 0, animated: true });
+      seriesListRef.current?.scrollToOffset({ offset: 0, animated: true });
     } else {
       booksListRef.current?.scrollToOffset({ offset: 0, animated: true });
     }
@@ -456,38 +467,48 @@ export default function HomeScreen() {
       />
 
       {viewMode === 'series' ? (
-        <ScrollView
-          key={`series-grid-${listVersion}`}
-          ref={seriesScrollRef}
+        <FlatList
+          key="series-list"
+          ref={seriesListRef}
           style={styles.list}
+          data={visibleGroups}
+          extraData={`${listVersion}-${refreshingSeriesTitle}-${showPublishedLatestVolume}`}
+          keyExtractor={(item) => item.id}
           contentContainerStyle={[styles.grid, { paddingTop: listTopPadding }]}
           showsVerticalScrollIndicator={false}
           onScroll={handleScroll}
           scrollEventThrottle={16}
-        >
-          {visibleGroups.map((item) => {
+          renderItem={({ item }) => {
             const stats = seriesStats.get(item.title);
             const cacheKey = normalizeSeriesKey(item.title);
+            const publicationInfo = publicationCache[cacheKey];
             return (
               <SeriesCard
                 key={item.id}
                 group={item}
                 missingVolumes={stats?.missingVolumes ?? []}
+                unownedVolumes={
+                  showPublishedLatestVolume
+                    ? getTrailingUnownedVolumes(item.latestVolume, publicationInfo?.latestVolume)
+                    : []
+                }
                 completionRate={stats?.completionRate ?? 100}
                 favorite={favoriteSeriesKeySet.has(cacheKey)}
                 showPublishedLatestVolume={showPublishedLatestVolume}
-                publicationInfo={publicationCache[cacheKey]}
+                publicationInfo={publicationInfo}
                 refreshing={refreshingSeriesTitle === item.title}
                 refreshDisabled={refreshingSeriesTitle !== null}
                 onToggleFavorite={() => toggleFavoriteSeries(item.title)}
                 onRefresh={() => void refreshSeriesPublication(item.title, item.latestVolume)}
               />
             );
-          })}
-          {visibleGroups.length === 0 && !loading ? (
-            <EmptyLibraryState requiresAuth={requiresAuth} libraryIsEmpty={books.length === 0} />
-          ) : null}
-        </ScrollView>
+          }}
+          ListEmptyComponent={
+            !loading ? (
+              <EmptyLibraryState requiresAuth={requiresAuth} libraryIsEmpty={books.length === 0} />
+            ) : null
+          }
+        />
       ) : (
         <FlatList
           key="books-list"

@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Tabs } from 'expo-router';
-import { Platform } from 'react-native';
+import { Platform, Text, View } from 'react-native';
 
 import { useAppTheme } from '../../src/store/ThemeContext';
 
@@ -19,6 +19,7 @@ export default function TabLayout() {
           backgroundColor: colors.surface,
           borderTopColor: colors.border,
           height: Platform.select({ ios: 84, default: 68 }),
+          overflow: 'visible',
           paddingTop: 8,
         },
         tabBarLabelStyle: { fontSize: 12, fontWeight: '700' },
@@ -38,13 +39,44 @@ export default function TabLayout() {
         name="scan"
         options={{
           title: 'スキャン',
-          tabBarLabel: '登録',
+          tabBarLabel: () => null,
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons color={color} name={focused ? 'barcode' : 'barcode-outline'} size={27} />
+            <View
+              style={{
+                alignItems: 'center',
+                backgroundColor: focused ? colors.text : colors.background,
+                borderColor: focused ? colors.text : colors.border,
+                borderRadius: 32,
+                borderWidth: 2,
+                height: 64,
+                justifyContent: 'center',
+                marginBottom: -8,
+                shadowColor: '#000000',
+                shadowOffset: { height: 3, width: 0 },
+                shadowOpacity: 0.14,
+                shadowRadius: 7,
+                width: 64,
+              }}
+            >
+              <Ionicons
+                color={focused ? colors.background : color}
+                name={focused ? 'barcode' : 'barcode-outline'}
+                size={22}
+              />
+              <Text
+                style={{
+                  color: focused ? colors.background : color,
+                  fontSize: 10,
+                  fontWeight: '800',
+                  marginTop: 2,
+                }}
+              >
+                登録
+              </Text>
+            </View>
           ),
           tabBarItemStyle: {
-            marginTop: -10,
-            borderRadius: 24,
+            marginTop: -18,
           },
         }}
       />

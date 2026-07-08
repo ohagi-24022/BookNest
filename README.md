@@ -48,7 +48,6 @@ EXPO_PUBLIC_SUPABASE_URL=
 EXPO_PUBLIC_SUPABASE_ANON_KEY=
 EXPO_PUBLIC_GOOGLE_BOOKS_API_KEY=
 EXPO_PUBLIC_RAKUTEN_APP_ID=
-EXPO_PUBLIC_RAKUTEN_ACCESS_KEY=
 ```
 
 Start with Expo Go:
@@ -70,12 +69,11 @@ npm run start:go -- --clear
 | `EXPO_PUBLIC_SUPABASE_URL` | Yes | Supabase project URL |
 | `EXPO_PUBLIC_SUPABASE_ANON_KEY` | Yes | Supabase anon public key |
 | `EXPO_PUBLIC_GOOGLE_BOOKS_API_KEY` | Recommended | Google Books API key |
-| `EXPO_PUBLIC_RAKUTEN_APP_ID` | Optional | Rakuten Web Service application ID for better Japanese book metadata and cover images |
-| `EXPO_PUBLIC_RAKUTEN_ACCESS_KEY` | Optional | Rakuten Web Service access key. Required together with the Rakuten application ID |
+| `EXPO_PUBLIC_RAKUTEN_APP_ID` | Optional | Rakuten Web Service application ID for local development fallback |
 
 Do not commit `.env`. Use `.env.example` as the shareable template.
 
-For production-like Rakuten API access, deploy the Supabase Edge Function and store the Rakuten values as Supabase secrets:
+For production-like Rakuten API access, deploy the Supabase Edge Function and store the Rakuten access key as a Supabase secret. Do not put the access key in `.env` or commit it to Git:
 
 ```bash
 npx supabase secrets set RAKUTEN_APP_ID=your-rakuten-application-id
@@ -85,6 +83,23 @@ npm run supabase:deploy:rakuten
 ```
 
 The deploy script uses `--use-api`, so Docker does not need to be running.
+
+## New Release Notifications
+
+Deploy the notification checker Edge Function:
+
+```bash
+npm run supabase:deploy:notifications
+```
+
+The app can save Expo Push Tokens and per-series notification subscriptions to Supabase.
+To run the checker on a schedule, store `project_url` and `function_key` in Supabase Vault, then run:
+
+```sql
+-- see supabase/schedules/check-new-releases.sql
+```
+
+The checker reads enabled `series_subscriptions`, looks up the latest volume, sends Expo push notifications, and records results in `notification_logs`.
 
 ## Supabase
 

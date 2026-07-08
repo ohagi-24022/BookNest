@@ -10,6 +10,7 @@ import { BookCover } from '../BookCover';
 type SeriesCardProps = {
   group: SeriesGroup;
   missingVolumes: number[];
+  unownedVolumes: number[];
   completionRate: number;
   favorite: boolean;
   showPublishedLatestVolume: boolean;
@@ -29,6 +30,7 @@ function formatMissingVolumes(volumes: number[]) {
 export function SeriesCard({
   group,
   missingVolumes,
+  unownedVolumes,
   completionRate,
   favorite,
   showPublishedLatestVolume,
@@ -123,6 +125,9 @@ export function SeriesCard({
             {missingVolumes.length > 0 && (
               <Text style={styles.missingBadge}>{formatMissingVolumes(missingVolumes)}</Text>
             )}
+            {unownedVolumes.length > 0 && (
+              <Text style={styles.unownedBadge}>{formatMissingVolumes(unownedVolumes).replace('不足', '未所持')}</Text>
+            )}
             {group.readCount === group.ownedCount && <Text style={styles.readBadge}>読了</Text>}
           </View>
         </View>
@@ -197,6 +202,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff7df',
     borderRadius: 6,
     color: '#765100',
+    flexShrink: 1,
+    fontSize: 11,
+    fontWeight: '700',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+  },
+  unownedBadge: {
+    backgroundColor: '#eef5ff',
+    borderRadius: 6,
+    color: '#1f5f9e',
     flexShrink: 1,
     fontSize: 11,
     fontWeight: '700',
