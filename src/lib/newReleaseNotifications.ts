@@ -192,17 +192,21 @@ export async function syncNewReleaseSubscriptions(userId: string, seriesGroups: 
   if (!supabase) return;
   const subscriptions = buildSeriesSubscriptions(seriesGroups);
   if (subscriptions.length === 0) return;
+  const existingSubscriptions = await getNewReleaseSubscriptions(userId);
+  const existingByKey = new Map(
+    existingSubscriptions.map((subscription) => [subscription.seriesKey, subscription]),
+  );
 
   const { error } = await supabase.from('series_subscriptions').upsert(
     subscriptions.map((subscription) => ({
       latest_known_volume: subscription.latestVolume ?? null,
-      enabled: false,
+      enabled: existingByKey.get(subscription.seriesKey)?.enabled ?? false,
       series_key: subscription.seriesKey,
       series_title: subscription.seriesTitle,
       updated_at: new Date().toISOString(),
       user_id: userId,
     })),
-    { onConflict: 'user_id,series_key', ignoreDuplicates: true },
+    { onConflict: 'user_id,series_key' },
   );
   if (error) throw new Error('通知対象シリーズを同期できませんでした。');
 }

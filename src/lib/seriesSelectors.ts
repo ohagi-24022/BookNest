@@ -1,6 +1,6 @@
 import { Book, MissingBook, ShelfItem } from '../types';
 import { normalizeAuthors } from './bookMetadata';
-import { getMissingVolumes } from './series';
+import { getMissingVolumes, normalizeSeriesKey } from './series';
 
 export type SeriesGroup = {
   id: string;
@@ -19,20 +19,22 @@ export type SeriesGroup = {
 export function buildSeriesGroups(books: Book[]): SeriesGroup[] {
   const bySeries = new Map<string, Book[]>();
   books.forEach((book) => {
-    const group = bySeries.get(book.seriesTitle) ?? [];
+    const seriesKey = normalizeSeriesKey(book.seriesTitle);
+    const group = bySeries.get(seriesKey) ?? [];
     group.push(book);
-    bySeries.set(book.seriesTitle, group);
+    bySeries.set(seriesKey, group);
   });
 
   return [...bySeries.entries()]
-    .map(([title, groupedBooks]) => {
+    .map(([seriesKey, groupedBooks]) => {
       const sortedBooks = [...groupedBooks].sort(
         (left, right) => (right.volumeNumber ?? 0) - (left.volumeNumber ?? 0),
       );
       const representative = sortedBooks.find((book) => !!book.thumbnailUrl) ?? sortedBooks[0];
+      const title = representative.seriesTitle;
 
       return {
-        id: encodeURIComponent(title),
+        id: encodeURIComponent(seriesKey),
         title,
         representative,
         ownedCount: groupedBooks.length,
@@ -58,8 +60,9 @@ export function buildSeriesItems(
   seriesTitle: string,
   missingUserId: string,
 ): ShelfItem[] {
+  const targetSeriesKey = normalizeSeriesKey(seriesTitle);
   const owned = books
-    .filter((book) => book.seriesTitle === seriesTitle)
+    .filter((book) => normalizeSeriesKey(book.seriesTitle) === targetSeriesKey)
     .sort((left, right) => (left.volumeNumber ?? 0) - (right.volumeNumber ?? 0));
   const missingVolumes = getMissingVolumes(
     owned.map((book) => book.volumeNumber).filter((volume): volume is number => !!volume),

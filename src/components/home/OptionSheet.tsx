@@ -12,22 +12,31 @@ type OptionSheetProps = {
   visible: boolean;
   title: string;
   options: Option[];
-  selectedValue: string;
+  multiple?: boolean;
   onBack?: () => void;
+  onApply?: () => void;
   onSelect: (value: string) => void;
   onClose: () => void;
+  selectedValue?: string;
+  selectedValues?: string[];
+  variant?: 'check' | 'list';
 };
 
 export function OptionSheet({
   visible,
   title,
   options,
-  selectedValue,
+  multiple = false,
   onBack,
+  onApply,
   onSelect,
   onClose,
+  selectedValue,
+  selectedValues,
+  variant = 'check',
 }: OptionSheetProps) {
   const { colors } = useAppTheme();
+  const activeValues = selectedValues ?? (selectedValue ? [selectedValue] : []);
 
   return (
     <Modal animationType="fade" onRequestClose={onClose} transparent visible={visible}>
@@ -51,29 +60,45 @@ export function OptionSheet({
           </View>
           <ScrollView showsVerticalScrollIndicator={false}>
             {options.map((option) => {
-              const selected = option.value === selectedValue;
+              const selected = activeValues.includes(option.value);
               return (
                 <Pressable
                   key={option.value}
                   onPress={() => onSelect(option.value)}
                   style={[styles.row, { borderBottomColor: colors.border }]}
                 >
-                  <View
-                    style={[
-                      styles.checkbox,
-                      { borderColor: selected ? colors.text : colors.border },
-                      selected && { backgroundColor: colors.text },
-                    ]}
-                  >
-                    <Text style={[styles.checkmark, { color: colors.background }]}>
-                      {selected ? '✓' : ''}
-                    </Text>
-                  </View>
+                  {variant === 'check' ? (
+                    <View
+                      style={[
+                        styles.checkbox,
+                        { borderColor: selected ? colors.text : colors.border },
+                        selected && { backgroundColor: colors.text },
+                      ]}
+                    >
+                      <Text style={[styles.checkmark, { color: colors.background }]}>
+                        {selected ? '✓' : ''}
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={styles.listIndicator}>
+                      {selected && <Ionicons color={colors.text} name="checkmark" size={19} />}
+                    </View>
+                  )}
                   <Text style={[styles.optionText, { color: colors.text }]}>{option.label}</Text>
                 </Pressable>
               );
             })}
           </ScrollView>
+          {multiple && (
+            <View style={[styles.footer, { borderTopColor: colors.border }]}>
+              <Pressable
+                onPress={onApply ?? onClose}
+                style={[styles.applyButton, { backgroundColor: colors.text }]}
+              >
+                <Text style={[styles.applyText, { color: colors.background }]}>適用</Text>
+              </Pressable>
+            </View>
+          )}
         </Pressable>
       </Pressable>
     </Modal>
@@ -113,10 +138,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     minHeight: 50,
   },
+  applyButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    height: 42,
+    justifyContent: 'center',
+  },
+  applyText: { fontSize: 14, fontWeight: '900' },
   checkbox: {
     alignItems: 'center',
     borderRadius: 4,
     borderWidth: 1,
+    height: 22,
+    justifyContent: 'center',
+    marginRight: 12,
+    width: 22,
+  },
+  footer: { borderTopWidth: StyleSheet.hairlineWidth, paddingVertical: 12 },
+  listIndicator: {
+    alignItems: 'center',
     height: 22,
     justifyContent: 'center',
     marginRight: 12,
