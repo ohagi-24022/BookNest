@@ -39,7 +39,8 @@
     "eas:build:production": "npx eas-cli build --profile production",
     "eas:submit:production": "npx eas-cli submit --profile production",
     "supabase:deploy:rakuten": "supabase functions deploy rakuten-books --use-api",
-    "supabase:deploy:notifications": "supabase functions deploy check-new-releases --use-api"
+    "supabase:deploy:notifications": "supabase functions deploy check-new-releases --use-api",
+    "supabase:deploy:delete-account": "supabase functions deploy delete-account --use-api"
   },
   "private": true
 }

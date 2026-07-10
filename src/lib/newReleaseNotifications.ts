@@ -29,15 +29,26 @@ export type NewReleaseCheckResult = {
   checked?: Array<{
     error?: string;
     latestVolume: number | null;
-    notified: number;
+    notified?: number;
+    queued?: number;
     seriesTitle: string;
+    cached?: boolean;
+    source?: string | null;
+  }>;
+  delivered?: Array<{
+    error?: string;
+    sent: number;
+    status: string;
+    userId: string;
   }>;
   error?: string;
+  mode?: 'all' | 'check' | 'deliver';
   ok?: boolean;
 };
 
 export type NewReleaseNotificationLog = {
   createdAt: string;
+  id?: string;
   notificationTitle?: string;
   seriesTitle: string;
   status: string;
@@ -237,7 +248,7 @@ export async function runNewReleaseCheck(limit = 10) {
 
   const { data, error } = await supabase.functions.invoke<NewReleaseCheckResult>(
     'check-new-releases',
-    { body: { limit } },
+    { body: { limit, mode: 'all', userLimit: 100 } },
   );
   if (error) {
     throw new Error(`新刊チェックを実行できませんでした。${describeFunctionError(error)}`);
@@ -247,6 +258,29 @@ export async function runNewReleaseCheck(limit = 10) {
   }
 
   return data ?? { checked: [] };
+}
+
+export async function getNewReleaseNotificationLogs(userId: string, limit = 50) {
+  if (!supabase) throw new Error('Supabaseが設定されていません。');
+
+  const { data, error } = await supabase
+    .from('notification_logs')
+    .select('id,series_title,volume_number,status,notification_title,created_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) throw new Error('通知履歴を取得できませんでした。');
+
+  return (data ?? []).map((row) => ({
+    createdAt: String(row.created_at),
+    id: String(row.id),
+    notificationTitle: row.notification_title ? String(row.notification_title) : undefined,
+    seriesTitle: String(row.series_title),
+    status: String(row.status),
+    volumeNumber:
+      typeof row.volume_number === 'number' ? row.volume_number : undefined,
+  })) satisfies NewReleaseNotificationLog[];
 }
 
 export async function getNewReleaseDiagnostics(userId: string) {

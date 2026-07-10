@@ -9,9 +9,12 @@ create extension if not exists pg_cron with schema extensions;
 create extension if not exists pg_net with schema extensions;
 create extension if not exists supabase_vault with schema vault;
 
+-- Supabase cron runs in UTC. The examples below target Japan time:
+-- 11:30 JST = 02:30 UTC, 12:00 JST = 03:00 UTC.
+
 select cron.schedule(
-  'booknest-check-new-releases',
-  '0 9 * * *',
+  'booknest-check-new-releases-at-1130-jst',
+  '30 2 * * *',
   $$
   select net.http_post(
     url := (select decrypted_secret from vault.decrypted_secrets where name = 'project_url') || '/functions/v1/check-new-releases',
@@ -19,7 +22,22 @@ select cron.schedule(
       'Content-Type', 'application/json',
       'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'function_key')
     ),
-    body := jsonb_build_object('limit', 30)
+    body := jsonb_build_object('mode', 'check', 'limit', 30)
+  );
+  $$
+);
+
+select cron.schedule(
+  'booknest-deliver-new-release-notifications-at-1200-jst',
+  '0 3 * * *',
+  $$
+  select net.http_post(
+    url := (select decrypted_secret from vault.decrypted_secrets where name = 'project_url') || '/functions/v1/check-new-releases',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'function_key')
+    ),
+    body := jsonb_build_object('mode', 'deliver', 'userLimit', 100)
   );
   $$
 );

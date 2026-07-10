@@ -232,7 +232,7 @@ export default function SettingsScreen() {
                     ? `${item.seriesTitle}: エラー ${item.error}`
                     : `${item.seriesTitle}: ${
                         item.latestVolume ? `${item.latestVolume}巻` : '最新巻不明'
-                      } / 通知${item.notified}件`,
+                      } / 詳細${item.queued ?? item.notified ?? 0}件`,
               )
               .join('\n')
           : '今回チェックされた通知対象シリーズはありません。';
@@ -293,6 +293,25 @@ export default function SettingsScreen() {
                 <Text style={[styles.rowCopy, { color: colors.muted }]}>{user.email}</Text>
               </View>
             </View>
+            <Link href="/account" asChild>
+              <Pressable
+                style={[
+                  styles.accountLink,
+                  { backgroundColor: colors.surface, borderColor: colors.border },
+                ]}
+              >
+                <View style={styles.accountIcon}>
+                  <Ionicons color={colors.text} name="person-circle-outline" size={22} />
+                </View>
+                <View style={styles.rowText}>
+                  <Text style={[styles.rowTitle, { color: colors.text }]}>ユーザーページ</Text>
+                  <Text style={[styles.rowCopy, { color: colors.muted }]}>
+                    通知履歴、アカウント情報、アカウント削除を確認できます。
+                  </Text>
+                </View>
+                <Ionicons color={colors.muted} name="chevron-forward" size={18} />
+              </Pressable>
+            </Link>
             <Pressable disabled={authSubmitting} style={[styles.neutralButton, { borderColor: colors.border }]} onPress={submitSignOut}>
               <Text style={[styles.neutralButtonText, { color: colors.text }]}>ログアウト</Text>
             </Pressable>
@@ -317,12 +336,6 @@ export default function SettingsScreen() {
                 </Pressable>
               </View>
             )}
-            <View style={[styles.pendingBox, { backgroundColor: colors.elevated }]}>
-              <Text style={[styles.rowTitle, { color: colors.text }]}>アカウント削除</Text>
-              <Text style={[styles.rowCopy, { color: colors.muted }]}>
-                データ削除の設計を固めるまで、操作ボタンは非表示にしています。
-              </Text>
-            </View>
           </>
         ) : (
           <View>
@@ -613,6 +626,21 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   dangerButtonText: { fontSize: 14, fontWeight: '800' },
+  accountLink: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 10,
+    padding: 12,
+  },
+  accountIcon: {
+    alignItems: 'center',
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
   pendingBox: {
     borderRadius: 8,
     padding: 12,

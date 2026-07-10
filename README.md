@@ -12,7 +12,10 @@ It is designed for readers who buy manga, light novels, and other multi-volume s
 - Missing volume detection for gaps such as volume 5 and 7 without volume 6
 - Reading status management: unread, reading, read
 - Bulk status updates in series detail
+- Per-series favorite and new release notification settings
 - Supabase Auth and PostgreSQL synchronization
+- Account deletion from the settings screen
+- CSV and JSON export
 - Light, dark, and system theme modes
 - External purchase link handling for missing volumes
 
@@ -101,6 +104,34 @@ To run the checker on a schedule, store `project_url` and `function_key` in Supa
 
 The checker reads enabled `series_subscriptions`, looks up the latest volume, sends Expo push notifications, and records results in `notification_logs`.
 
+The production notification flow is split into two phases:
+
+- Around 11:30 JST, the server checks the latest publication by series, not by user.
+- Around 12:00 JST, the server sends one generic notification per user in batches of up to 100 users.
+- Notification text does not include the series title. Users can open the in-app user page to see the detailed series and volume list.
+- `notification_logs` is also used as the in-app notification detail list.
+- Old notification logs are pruned by the Edge Function after 90 days.
+
+Book cover images are not copied into Supabase Storage. BookNest stores provider image URLs in `books.thumbnail_url` and renders those URLs directly, following the safer URL-cache approach for Google Books, Rakuten Books, and OpenBD metadata.
+
+## Account Deletion
+
+BookNest supports account deletion from the settings screen.
+Deletion is handled by the `delete-account` Supabase Edge Function so the service role key never needs to be stored in the app.
+
+Deploy the function:
+
+```bash
+npm run supabase:deploy:delete-account
+```
+
+When a logged-in user deletes their account, the app removes user-scoped cloud data such as push tokens, series notification settings, notification logs, and the Supabase Auth user. Book rows are connected to the Auth user with `on delete cascade`, so they are removed with the account.
+
+## Privacy Policy
+
+A Japanese privacy policy template is available at [`docs/privacy-policy.md`](docs/privacy-policy.md).
+Before publishing, replace the operator name, contact information, and public policy URL with the real production values.
+
 ## Supabase
 
 Database migrations are stored in `supabase/migrations`.
@@ -145,7 +176,5 @@ BookNest is under active development. Current focus areas are:
 - More reliable series grouping
 - Better cover image retrieval for Japanese books
 - Missing volume workflow improvements
-- Scan confirmation and continuous registration modes
+- Scan confirmation and continuous registration improvements
 - Reading notes and reading history features
-
-New release push notifications are planned, but currently deferred until the data model and notification workflow are finalized.
