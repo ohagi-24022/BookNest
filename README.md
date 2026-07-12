@@ -114,6 +114,32 @@ The production notification flow is split into two phases:
 
 Book cover images are not copied into Supabase Storage. BookNest stores provider image URLs in `books.thumbnail_url` and renders those URLs directly, following the safer URL-cache approach for Google Books, Rakuten Books, and OpenBD metadata.
 
+## Operations and Scale Strategy
+
+BookNest is designed to start on Supabase and keep a migration path open for heavier server-side work.
+
+Operational logs are stored in `server_operation_logs`:
+
+- `external-api-proxy`: Rakuten Books proxy calls from the app or server
+- `external-api-call`: server-side external API calls during new release checks
+- `check-new-releases`: scheduled notification batch runs
+
+The settings screen shows a development-only diagnostics button for recent operation logs.
+
+Migration should be considered when:
+
+- Edge Function execution time or invocation count regularly approaches plan limits
+- new release subscriptions grow to tens of thousands of series checks
+- retry queues, detailed monitoring, or admin dashboards become necessary
+- Supabase plan cost exceeds a small dedicated worker service
+
+Preferred migration path:
+
+1. Keep Supabase Auth and PostgreSQL as the system of record.
+2. Move only server-heavy jobs, such as new release checks and API cache refreshes, to Cloud Run, Railway, Render, or another worker runtime.
+3. Keep app-facing contracts stable by preserving the current Edge Function response shapes.
+4. Move the entire backend only if database limits, not just batch work, become the bottleneck.
+
 ## Account Deletion
 
 BookNest supports account deletion from the settings screen.

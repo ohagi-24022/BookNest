@@ -54,6 +54,7 @@ const CHECK_CACHE_HOURS = 20;
 const DEFAULT_CHECK_LIMIT = 30;
 const DEFAULT_USER_LIMIT = 100;
 const LOG_RETENTION_DAYS = 90;
+const OPERATION_LOG_RETENTION_DAYS = 30;
 
 const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -67,6 +68,7 @@ Deno.serve(async (request) => {
   }
 
   try {
+    const startedAt = Date.now();
     const body = await safeJson(request);
     const mode = normalizeMode(body.mode);
     const limit = Number.isFinite(body.limit)
@@ -89,12 +91,35 @@ Deno.serve(async (request) => {
     }
 
     await pruneOldNotificationLogs();
+    await pruneOldOperationLogs();
 
     const checked = mode === 'deliver' ? [] : await checkSeries(limit);
     const delivered = mode === 'check' ? [] : await deliverDailyNotifications(userLimit);
 
+    await writeOperationLog({
+      durationMs: Date.now() - startedAt,
+      metadata: {
+        checkedCount: checked.length,
+        deliveredUserCount: delivered.length,
+        limit,
+        mode,
+        userLimit,
+      },
+      operation: 'check-new-releases',
+      provider: 'supabase-edge-function',
+      requestCount: 1,
+      status: 'ok',
+    });
+
     return jsonResponse({ checked, delivered, mode, ok: true });
   } catch (error) {
+    await writeOperationLog({
+      metadata: { error: describeError(error) },
+      operation: 'check-new-releases',
+      provider: 'supabase-edge-function',
+      requestCount: 1,
+      status: 'error',
+    });
     return jsonResponse(
       { checked: [], delivered: [], error: describeError(error), ok: false },
       200,
@@ -291,6 +316,11 @@ async function pruneOldNotificationLogs() {
   if (error) throw error;
 }
 
+async function pruneOldOperationLogs() {
+  const before = new Date(Date.now() - OPERATION_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  await supabase.from('server_operation_logs').delete().lt('created_at', before);
+}
+
 async function safeJson(request: Request) {
   try {
     return await request.json();
@@ -312,6 +342,7 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 async function lookupLatestSeriesVolume(seriesTitle: string) {
+  const startedAt = Date.now();
   const params = {
     hits: '30',
     outOfStockFlag: '1',
@@ -330,9 +361,33 @@ async function lookupLatestSeriesVolume(seriesTitle: string) {
     },
     method: 'POST',
   });
-  if (!response.ok) return null;
+  if (!response.ok) {
+    await writeOperationLog({
+      durationMs: Date.now() - startedAt,
+      metadata: { endpoint: 'BooksBook/Search/20170404', seriesTitle, status: response.status },
+      operation: 'external-api-call',
+      provider: 'Rakuten Books',
+      requestCount: 1,
+      status: 'error',
+    });
+    return null;
+  }
 
   const payload = (await response.json()) as RakutenProxyResponse;
+  await writeOperationLog({
+    durationMs: Date.now() - startedAt,
+    metadata: {
+      endpoint: 'BooksBook/Search/20170404',
+      ok: payload.ok,
+      seriesTitle,
+      status: payload.status,
+    },
+    operation: 'external-api-call',
+    provider: 'Rakuten Books',
+    requestCount: 1,
+    status: payload.ok ? 'ok' : 'error',
+  });
+
   if (!payload.ok || !isRakutenBooksResponse(payload.body)) return null;
 
   const volumes = payload.body.Items
@@ -341,6 +396,28 @@ async function lookupLatestSeriesVolume(seriesTitle: string) {
     .filter((volume): volume is number => !!volume && volume > 0 && volume <= 500);
 
   return volumes && volumes.length > 0 ? Math.max(...volumes) : null;
+}
+
+async function writeOperationLog(input: {
+  durationMs?: number;
+  metadata?: Record<string, unknown>;
+  operation: string;
+  provider?: string;
+  requestCount?: number;
+  status: 'ok' | 'error' | 'skipped';
+}) {
+  try {
+    await supabase.from('server_operation_logs').insert({
+      duration_ms: input.durationMs ?? null,
+      metadata: input.metadata ?? null,
+      operation: input.operation,
+      provider: input.provider ?? null,
+      request_count: input.requestCount ?? 1,
+      status: input.status,
+    });
+  } catch {
+    // Operation logs are useful for migration planning, but must never block user-facing work.
+  }
 }
 
 function isRakutenBooksResponse(value: unknown): value is RakutenBooksResponse {

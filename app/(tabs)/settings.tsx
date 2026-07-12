@@ -20,6 +20,7 @@ import {
   disableNewReleaseNotifications,
   enableNewReleaseNotifications,
   getNewReleaseDiagnostics,
+  getServerOperationDiagnostics,
   runNewReleaseCheck,
   sendNewReleaseDebugNotification,
   syncNewReleaseSubscriptions,
@@ -59,6 +60,7 @@ export default function SettingsScreen() {
   const [newReleaseCheckSubmitting, setNewReleaseCheckSubmitting] = useState(false);
   const [notificationDebugSubmitting, setNotificationDebugSubmitting] = useState(false);
   const [notificationSubmitting, setNotificationSubmitting] = useState(false);
+  const [operationDiagnosticsSubmitting, setOperationDiagnosticsSubmitting] = useState(false);
 
   const submitAuth = async (authMode: 'signIn' | 'signUp') => {
     if (!email.trim() || !password) {
@@ -273,6 +275,30 @@ export default function SettingsScreen() {
     }
   };
 
+  const showOperationDiagnostics = async () => {
+    setOperationDiagnosticsSubmitting(true);
+    try {
+      const summaries = await getServerOperationDiagnostics(24);
+      const message =
+        summaries.length > 0
+          ? summaries
+              .map(
+                (summary) =>
+                  `${summary.operation}${summary.provider ? ` / ${summary.provider}` : ''}: ${summary.requestCount}件 / エラー${summary.errorCount}件`,
+              )
+              .join('\n')
+          : '直近24時間の運用ログはありません。';
+      Alert.alert('運用ログ', message);
+    } catch (error) {
+      Alert.alert(
+        '運用ログを取得できませんでした',
+        error instanceof Error ? error.message : 'SQLマイグレーションの反映状態を確認してください。',
+      );
+    } finally {
+      setOperationDiagnosticsSubmitting(false);
+    }
+  };
+
   return (
     <ScrollView
       ref={scrollRef}
@@ -409,6 +435,19 @@ export default function SettingsScreen() {
             <Text style={[styles.rowCopy, { color: colors.muted }]}>
               Rakuten App ID: {envStatus.hasRakutenAppId ? '設定済み' : '未設定'}
             </Text>
+            <Pressable
+              disabled={operationDiagnosticsSubmitting}
+              onPress={() => void showOperationDiagnostics()}
+              style={[
+                styles.neutralButton,
+                { borderColor: colors.border },
+                operationDiagnosticsSubmitting && styles.disabledButton,
+              ]}
+            >
+              <Text style={[styles.neutralButtonText, { color: colors.text }]}>
+                {operationDiagnosticsSubmitting ? '運用ログ確認中' : '運用ログを見る'}
+              </Text>
+            </Pressable>
           </View>
         ) : (
           <Text style={[styles.rowCopy, { color: colors.muted }]}>

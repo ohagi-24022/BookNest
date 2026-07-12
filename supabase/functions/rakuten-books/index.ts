@@ -1,6 +1,15 @@
+// @ts-nocheck
+import { createClient } from 'npm:@supabase/supabase-js@2';
+
 const RAKUTEN_API_BASE_URL = 'https://openapi.rakuten.co.jp/services/api';
 const DEFAULT_REFERER = 'https://github.com/ohagi-24022/BookNest';
 const PROXY_VERSION = '2026-07-02-raw-tls';
+
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
+const SUPABASE_SERVICE_ROLE_KEY =
+  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ??
+  JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS') ?? '{}').default;
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 declare const Deno: {
   env: {
@@ -34,11 +43,19 @@ Deno.serve(async (request: Request) => {
   }
 
   try {
+    const startedAt = Date.now();
     const appId = Deno.env.get('RAKUTEN_APP_ID');
     const accessKey = Deno.env.get('RAKUTEN_ACCESS_KEY');
     const referer = Deno.env.get('RAKUTEN_REFERER') ?? DEFAULT_REFERER;
 
     if (!appId || !accessKey) {
+      await writeOperationLog({
+        durationMs: Date.now() - startedAt,
+        metadata: { reason: 'missing-rakuten-secrets' },
+        operation: 'external-api-proxy',
+        provider: 'Rakuten Books',
+        status: 'error',
+      });
       return jsonResponse({
         ok: false,
         status: 500,
@@ -49,6 +66,13 @@ Deno.serve(async (request: Request) => {
     const payload = (await request.json()) as RakutenProxyRequest;
     const path = payload.path;
     if (!path || !/^Books(?:Book|Total)\/Search\/20170404$/.test(path)) {
+      await writeOperationLog({
+        durationMs: Date.now() - startedAt,
+        metadata: { path },
+        operation: 'external-api-proxy',
+        provider: 'Rakuten Books',
+        status: 'error',
+      });
       return jsonResponse({
         ok: false,
         status: 400,
@@ -65,6 +89,18 @@ Deno.serve(async (request: Request) => {
       `${RAKUTEN_API_BASE_URL}/${path}?${params.toString()}`,
       referer,
     );
+    await writeOperationLog({
+      durationMs: Date.now() - startedAt,
+      metadata: {
+        path,
+        proxyVersion: PROXY_VERSION,
+        refererConfigured: Boolean(referer),
+        status: response.status,
+      },
+      operation: 'external-api-proxy',
+      provider: 'Rakuten Books',
+      status: response.status >= 200 && response.status < 300 ? 'ok' : 'error',
+    });
     const text = response.text;
     let body: unknown = text;
 
@@ -85,6 +121,12 @@ Deno.serve(async (request: Request) => {
       },
     });
   } catch (error) {
+    await writeOperationLog({
+      metadata: { error: error instanceof Error ? error.message : 'Unknown error' },
+      operation: 'external-api-proxy',
+      provider: 'Rakuten Books',
+      status: 'error',
+    });
     return jsonResponse({
       ok: false,
       status: 500,
@@ -100,6 +142,29 @@ Deno.serve(async (request: Request) => {
 
 function fetchRakuten(url: string, referer: string): Promise<{ status: number; text: string }> {
   return fetchRakutenOverRawTls(url, referer);
+}
+
+async function writeOperationLog(input: {
+  durationMs?: number;
+  metadata?: Record<string, unknown>;
+  operation: string;
+  provider?: string;
+  requestCount?: number;
+  status: 'ok' | 'error' | 'skipped';
+}) {
+  try {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return;
+    await supabase.from('server_operation_logs').insert({
+      duration_ms: input.durationMs ?? null,
+      metadata: input.metadata ?? null,
+      operation: input.operation,
+      provider: input.provider ?? null,
+      request_count: input.requestCount ?? 1,
+      status: input.status,
+    });
+  } catch {
+    // Logging must not block metadata lookup.
+  }
 }
 
 async function fetchRakutenOverRawTls(

@@ -55,6 +55,15 @@ export type NewReleaseNotificationLog = {
   volumeNumber?: number;
 };
 
+export type ServerOperationSummary = {
+  errorCount: number;
+  lastRunAt?: string;
+  operation: string;
+  provider?: string;
+  requestCount: number;
+  totalDurationMs: number;
+};
+
 function getProjectId() {
   return Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
 }
@@ -281,6 +290,45 @@ export async function getNewReleaseNotificationLogs(userId: string, limit = 50) 
     volumeNumber:
       typeof row.volume_number === 'number' ? row.volume_number : undefined,
   })) satisfies NewReleaseNotificationLog[];
+}
+
+export async function getServerOperationDiagnostics(hours = 24) {
+  if (!supabase) throw new Error('Supabaseが設定されていません。');
+
+  const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from('server_operation_logs')
+    .select('operation,provider,status,request_count,duration_ms,created_at')
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(500);
+
+  if (error) throw new Error('運用ログを取得できませんでした。SQLマイグレーションが反映済みか確認してください。');
+
+  const summaries = new Map<string, ServerOperationSummary>();
+  for (const row of data ?? []) {
+    const operation = String(row.operation);
+    const provider = row.provider ? String(row.provider) : undefined;
+    const key = `${operation}:${provider ?? ''}`;
+    const current =
+      summaries.get(key) ??
+      ({
+        errorCount: 0,
+        lastRunAt: undefined,
+        operation,
+        provider,
+        requestCount: 0,
+        totalDurationMs: 0,
+      } satisfies ServerOperationSummary);
+
+    current.requestCount += typeof row.request_count === 'number' ? row.request_count : 1;
+    current.totalDurationMs += typeof row.duration_ms === 'number' ? row.duration_ms : 0;
+    if (String(row.status) === 'error') current.errorCount += 1;
+    current.lastRunAt = current.lastRunAt ?? String(row.created_at);
+    summaries.set(key, current);
+  }
+
+  return [...summaries.values()];
 }
 
 export async function getNewReleaseDiagnostics(userId: string) {
