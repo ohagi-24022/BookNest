@@ -252,6 +252,11 @@ export default function SettingsScreen() {
   };
 
   const showOperationDiagnostics = async () => {
+    Alert.alert(
+      '運用ログ',
+      '運用ログは公開後のサーバー管理用に制限しました。新刊通知の詳細は「新刊通知を確認する」から確認できます。',
+    );
+    return;
     setOperationDiagnosticsSubmitting(true);
     try {
       const summaries = await getServerOperationDiagnostics(24);
@@ -265,7 +270,7 @@ export default function SettingsScreen() {
               .join('\n')
           : '直近24時間の運用ログはありません。';
       Alert.alert('運用ログ', message);
-    } catch (error) {
+    } catch (error: any) {
       Alert.alert(
         '運用ログを取得できませんでした',
         error instanceof Error ? error.message : 'SQLマイグレーションの反映状態を確認してください。',
@@ -533,6 +538,20 @@ export default function SettingsScreen() {
             ? 'シリーズごとの通知ON/OFFは、本棚のシリーズカードから変更できます。'
             : 'ログイン後にONにすると、端末とシリーズ情報を通知用に登録します。'}
         </Text>
+        <Link href="/notifications" asChild>
+          <Pressable style={[styles.largeNavigationButton, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <View style={[styles.largeNavigationIcon, { backgroundColor: colors.elevated }]}>
+              <Ionicons color="#ffcc00" name="notifications" size={22} />
+            </View>
+            <View style={styles.rowText}>
+              <Text style={[styles.largeNavigationTitle, { color: colors.text }]}>新刊通知を確認する</Text>
+              <Text style={[styles.rowCopy, { color: colors.muted }]}>
+                通知されたシリーズと巻数の詳細を一覧で確認できます。
+              </Text>
+            </View>
+            <Ionicons color={colors.muted} name="chevron-forward" size={18} />
+          </Pressable>
+        </Link>
         <Pressable
           disabled={notificationDebugSubmitting}
           onPress={() => void runNotificationDebug()}
@@ -601,6 +620,31 @@ export default function SettingsScreen() {
           ))}
         </View>
       </View>
+
+      <View style={[styles.section, { borderBottomColor: colors.border }]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>アプリ情報</Text>
+        <Link href="/privacy" asChild>
+          <Pressable
+            style={[
+              styles.accountLink,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+            ]}
+          >
+            <View style={styles.accountIcon}>
+              <Ionicons color={colors.text} name="document-text-outline" size={21} />
+            </View>
+            <View style={styles.rowText}>
+              <View style={styles.linkTitleRow}>
+                <Ionicons color={colors.muted} name="chevron-forward" size={16} />
+                <Text style={[styles.rowTitle, { color: colors.text }]}>プライバシーポリシー</Text>
+              </View>
+              <Text style={[styles.rowCopy, { color: colors.muted }]} numberOfLines={2}>
+                取得する情報、通知、ランキング集計、外部サービス利用について確認できます。
+              </Text>
+            </View>
+          </Pressable>
+        </Link>
+      </View>
     </ScrollView>
   );
 }
@@ -634,6 +678,24 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   neutralButtonText: { fontSize: 14, fontWeight: '800' },
+  largeNavigationButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 12,
+    minHeight: 72,
+    padding: 14,
+  },
+  largeNavigationIcon: {
+    alignItems: 'center',
+    borderRadius: 8,
+    height: 42,
+    justifyContent: 'center',
+    width: 42,
+  },
+  largeNavigationTitle: { fontSize: 16, fontWeight: '900' },
   dangerButton: {
     alignItems: 'center',
     borderRadius: 8,

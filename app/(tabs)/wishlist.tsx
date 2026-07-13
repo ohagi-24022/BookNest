@@ -13,7 +13,7 @@ import {
 
 import { buildPurchaseUrl } from '../../src/lib/bookApis';
 import { useAppTheme } from '../../src/store/ThemeContext';
-import { useWishlist } from '../../src/store/WishlistContext';
+import { useWishlist, WishlistItem } from '../../src/store/WishlistContext';
 
 const priorityOptions = [
   { key: 'high', label: '最優先', score: 95, icon: 'flame-outline' as const },
@@ -34,6 +34,10 @@ export default function WishlistScreen() {
   const [note, setNote] = useState('');
   const [selectedPriority, setSelectedPriority] = useState(priorityOptions[1]);
   const [memoOpen, setMemoOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
+  const [editingNote, setEditingNote] = useState('');
+  const [lastDeleted, setLastDeleted] = useState<WishlistItem | null>(null);
 
   const trimmedTitle = title.trim();
   const topItems = useMemo(() => items.slice(0, 3), [items]);
@@ -53,6 +57,38 @@ export default function WishlistScreen() {
     setNote('');
     setMemoOpen(false);
     setSelectedPriority(priorityOptions[1]);
+  };
+
+  const startEditing = (item: WishlistItem) => {
+    setEditingId(item.id);
+    setEditingTitle(item.title);
+    setEditingNote(item.note ?? '');
+  };
+
+  const submitEdit = (item: WishlistItem) => {
+    updateItem(item.id, {
+      title: editingTitle,
+      note: editingNote,
+    });
+    setEditingId(null);
+    setEditingTitle('');
+    setEditingNote('');
+  };
+
+  const removeItem = (item: WishlistItem) => {
+    deleteItem(item.id);
+    setLastDeleted(item);
+  };
+
+  const undoDelete = () => {
+    if (!lastDeleted) return;
+    addItem({
+      title: lastDeleted.title,
+      score: lastDeleted.score,
+      note: lastDeleted.note,
+      purchaseUrl: lastDeleted.purchaseUrl,
+    });
+    setLastDeleted(null);
   };
 
   return (
@@ -128,6 +164,17 @@ export default function WishlistScreen() {
         ) : null}
       </View>
 
+      {lastDeleted ? (
+        <View style={[styles.undoBar, { backgroundColor: colors.elevated, borderColor: colors.border }]}>
+          <Text style={[styles.copyStrong, { color: colors.text }]} numberOfLines={1}>
+            {lastDeleted.title}を削除しました
+          </Text>
+          <Pressable onPress={undoDelete} style={[styles.undoButton, { borderColor: colors.border }]}>
+            <Text style={[styles.smallButtonText, { color: colors.text }]}>元に戻す</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
       {topItems.length > 0 ? (
         <View style={[styles.summary, { borderColor: colors.border }]}>
           <Text style={[styles.summaryTitle, { color: colors.text }]}>今の上位候補</Text>
@@ -167,6 +214,40 @@ export default function WishlistScreen() {
                 </View>
               </View>
 
+              {editingId === item.id ? (
+                <View style={styles.editBox}>
+                  <TextInput
+                    onChangeText={setEditingTitle}
+                    placeholder="作品名"
+                    placeholderTextColor={colors.muted}
+                    style={[styles.editInput, { backgroundColor: colors.input, color: colors.text }]}
+                    value={editingTitle}
+                  />
+                  <TextInput
+                    multiline
+                    onChangeText={setEditingNote}
+                    placeholder="メモ"
+                    placeholderTextColor={colors.muted}
+                    style={[styles.editNoteInput, { backgroundColor: colors.input, color: colors.text }]}
+                    value={editingNote}
+                  />
+                  <View style={styles.editActions}>
+                    <Pressable
+                      onPress={() => setEditingId(null)}
+                      style={[styles.smallButton, { borderColor: colors.border }]}
+                    >
+                      <Text style={[styles.smallButtonText, { color: colors.text }]}>キャンセル</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => submitEdit(item)}
+                      style={[styles.smallButton, { backgroundColor: colors.text, borderColor: colors.text }]}
+                    >
+                      <Text style={[styles.smallButtonText, { color: colors.background }]}>保存</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
+
               <View style={styles.actions}>
                 <Pressable
                   onPress={() => void WebBrowser.openBrowserAsync(item.purchaseUrl ?? buildPurchaseUrl(item.title))}
@@ -174,6 +255,13 @@ export default function WishlistScreen() {
                 >
                   <Ionicons color={colors.text} name="open-outline" size={16} />
                   <Text style={[styles.smallButtonText, { color: colors.text }]}>購入候補</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityLabel={`${item.title}を編集`}
+                  onPress={() => startEditing(item)}
+                  style={[styles.iconButton, { borderColor: colors.border }]}
+                >
+                  <Ionicons color={colors.text} name="create-outline" size={16} />
                 </Pressable>
                 <Pressable
                   accessibilityLabel={`${item.title}の優先度を上げる`}
@@ -191,7 +279,7 @@ export default function WishlistScreen() {
                 </Pressable>
                 <Pressable
                   accessibilityLabel={`${item.title}を削除`}
-                  onPress={() => deleteItem(item.id)}
+                  onPress={() => removeItem(item)}
                   style={[styles.iconButton, { borderColor: colors.danger }]}
                 >
                   <Ionicons color={colors.danger} name="trash-outline" size={16} />
@@ -265,6 +353,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
+  undoBar: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  undoButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 34,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  editBox: { gap: 8, marginLeft: 46 },
+  editInput: { borderRadius: 8, fontSize: 15, height: 42, paddingHorizontal: 12 },
+  editNoteInput: {
+    borderRadius: 8,
+    fontSize: 14,
+    minHeight: 58,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    textAlignVertical: 'top',
+  },
+  editActions: { flexDirection: 'row', gap: 8, justifyContent: 'flex-end' },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginLeft: 46 },
   smallButton: {
     alignItems: 'center',

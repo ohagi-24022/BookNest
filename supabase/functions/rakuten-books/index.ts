@@ -59,11 +59,14 @@ Deno.serve(async (request: Request) => {
         provider: 'Rakuten Books',
         status: 'error',
       });
-      return jsonResponse({
-        ok: false,
-        status: 429,
-        body: { error: 'RATE_LIMITED', message: 'Too many Rakuten Books requests. Please try again later.' },
-      });
+      return jsonResponse(
+        {
+          ok: false,
+          status: 429,
+          body: { error: 'RATE_LIMITED', message: 'Too many Rakuten Books requests. Please try again later.' },
+        },
+        429,
+      );
     }
 
     if (!appId || !accessKey) {
@@ -74,11 +77,14 @@ Deno.serve(async (request: Request) => {
         provider: 'Rakuten Books',
         status: 'error',
       });
-      return jsonResponse({
-        ok: false,
-        status: 500,
-        body: { error: 'RAKUTEN_APP_ID and RAKUTEN_ACCESS_KEY are required.' },
-      });
+      return jsonResponse(
+        {
+          ok: false,
+          status: 500,
+          body: { error: 'RAKUTEN_APP_ID and RAKUTEN_ACCESS_KEY are required.' },
+        },
+        500,
+      );
     }
 
     const payload = (await request.json()) as RakutenProxyRequest;
@@ -91,11 +97,14 @@ Deno.serve(async (request: Request) => {
         provider: 'Rakuten Books',
         status: 'error',
       });
-      return jsonResponse({
-        ok: false,
-        status: 400,
-        body: { error: 'Invalid Rakuten API path.' },
-      });
+      return jsonResponse(
+        {
+          ok: false,
+          status: 400,
+          body: { error: 'Invalid Rakuten API path.' },
+        },
+        400,
+      );
     }
 
     const params = new URLSearchParams(payload.params ?? {});
@@ -129,16 +138,19 @@ Deno.serve(async (request: Request) => {
       // Keep non-JSON error bodies visible to the app debug modal.
     }
 
-    return jsonResponse({
-      ok: response.status >= 200 && response.status < 300,
-      status: response.status,
-      body,
-      proxy: {
-        version: PROXY_VERSION,
-        transport: 'raw-tls',
-        refererConfigured: Boolean(referer),
+    return jsonResponse(
+      {
+        ok: response.status >= 200 && response.status < 300,
+        status: response.status,
+        body,
+        proxy: {
+          version: PROXY_VERSION,
+          transport: 'raw-tls',
+          refererConfigured: Boolean(referer),
+        },
       },
-    });
+      response.status,
+    );
   } catch (error) {
     await writeOperationLog({
       metadata: { error: error instanceof Error ? error.message : 'Unknown error' },
@@ -146,16 +158,19 @@ Deno.serve(async (request: Request) => {
       provider: 'Rakuten Books',
       status: 'error',
     });
-    return jsonResponse({
-      ok: false,
-      status: 500,
-      body: { error: error instanceof Error ? error.message : 'Unknown error' },
-      proxy: {
-        version: PROXY_VERSION,
-        transport: 'raw-tls',
-        refererConfigured: false,
+    return jsonResponse(
+      {
+        ok: false,
+        status: 500,
+        body: { error: error instanceof Error ? error.message : 'Unknown error' },
+        proxy: {
+          version: PROXY_VERSION,
+          transport: 'raw-tls',
+          refererConfigured: false,
+        },
       },
-    });
+      500,
+    );
   }
 });
 
@@ -346,8 +361,9 @@ function findSequence(bytes: Uint8Array, sequence: number[], start = 0) {
   return -1;
 }
 
-function jsonResponse(body: unknown) {
+function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
+    status,
     headers: {
       ...corsHeaders,
       'Content-Type': 'application/json',

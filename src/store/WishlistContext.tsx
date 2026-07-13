@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   createContext,
   PropsWithChildren,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -11,7 +12,7 @@ import {
 import { supabase } from '../lib/supabase';
 import { useAuth } from './AuthContext';
 
-const STORAGE_KEY = 'booknest.wishlist.v1';
+const GUEST_STORAGE_KEY = 'booknest.wishlist.v1.guest';
 
 export type WishlistItem = {
   id: string;
@@ -37,6 +38,17 @@ type WishlistContextValue = {
   updateItem: (id: string, input: Partial<WishlistInput>) => void;
 };
 
+type WantedMangaRow = {
+  created_at?: string | null;
+  id?: string | null;
+  note?: string | null;
+  normalized_title: string;
+  purchase_url?: string | null;
+  score: number;
+  title: string;
+  updated_at?: string | null;
+};
+
 const WishlistContext = createContext<WishlistContextValue | null>(null);
 
 function createId() {
@@ -52,67 +64,132 @@ function normalizeWantedTitle(title: string) {
   return title
     .normalize('NFKC')
     .toLowerCase()
-    .replace(/[「」『』【】［］\[\]（）()]/g, ' ')
+    .replace(/[\u300c\u300d\u300e\u300f\u3010\u3011\uff3b\uff3d[\]\uff08\uff09()]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
+function getStorageKey(userId?: string) {
+  return userId ? `booknest.wishlist.v1.${userId}` : GUEST_STORAGE_KEY;
+}
+
+function toWishlistItem(row: WantedMangaRow): WishlistItem {
+  const now = new Date().toISOString();
+  return {
+    id: row.id ?? `cloud-${row.normalized_title}`,
+    title: row.title,
+    score: clampScore(row.score),
+    note: row.note ?? undefined,
+    purchaseUrl: row.purchase_url ?? undefined,
+    createdAt: row.created_at ?? row.updated_at ?? now,
+    updatedAt: row.updated_at ?? row.created_at ?? now,
+  };
+}
+
+function mergeItems(localItems: WishlistItem[], cloudItems: WishlistItem[]) {
+  const byTitle = new Map<string, WishlistItem>();
+  for (const item of [...localItems, ...cloudItems]) {
+    const key = normalizeWantedTitle(item.title);
+    if (!key) continue;
+    const current = byTitle.get(key);
+    if (!current || item.updatedAt.localeCompare(current.updatedAt) >= 0) {
+      byTitle.set(key, item);
+    }
+  }
+  return [...byTitle.values()];
+}
+
+function parseStoredItems(value: string | null) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? (parsed as WishlistItem[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 export function WishlistProvider({ children }: PropsWithChildren) {
   const { user } = useAuth();
+  const storageKey = getStorageKey(user?.id);
   const [items, setItems] = useState<WishlistItem[]>([]);
   const [hydrated, setHydrated] = useState(false);
 
-  useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY)
-      .then((storedItems) => {
-        if (!storedItems) return;
-        const parsedItems = JSON.parse(storedItems) as WishlistItem[];
-        if (Array.isArray(parsedItems)) setItems(parsedItems);
-      })
-      .finally(() => setHydrated(true));
-  }, []);
-
-  useEffect(() => {
-    if (!hydrated) return;
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-  }, [hydrated, items]);
-
-  useEffect(() => {
-    if (!hydrated || !supabase || !user) return;
-    const client = supabase;
-    const syncWishlist = async () => {
-      const rows = items
-        .map((item) => ({
+  const persistCloudItem = useCallback(
+    async (item: WishlistItem) => {
+      if (!supabase || !user) return;
+      const normalizedTitle = normalizeWantedTitle(item.title);
+      if (!normalizedTitle) return;
+      const { error } = await supabase.from('wanted_manga').upsert(
+        {
           note: item.note ?? null,
-          normalized_title: normalizeWantedTitle(item.title),
+          normalized_title: normalizedTitle,
           purchase_url: item.purchaseUrl ?? null,
           score: item.score,
           title: item.title,
           updated_at: item.updatedAt,
           user_id: user.id,
-        }))
-        .filter((row) => row.normalized_title);
-
-      if (rows.length > 0) {
-        await client.from('wanted_manga').upsert(rows, { onConflict: 'user_id,normalized_title' });
+        },
+        { onConflict: 'user_id,normalized_title' },
+      );
+      if (error) {
+        console.warn('Failed to sync wanted manga item.', error.message);
       }
+    },
+    [user],
+  );
 
-      const currentKeys = new Set(rows.map((row) => row.normalized_title));
-      const { data: storedRows } = await client
+  const deleteCloudItem = useCallback(
+    async (item: WishlistItem) => {
+      if (!supabase || !user) return;
+      const normalizedTitle = normalizeWantedTitle(item.title);
+      if (!normalizedTitle) return;
+      const { error } = await supabase
         .from('wanted_manga')
-        .select('normalized_title')
-        .eq('user_id', user.id);
-      const staleKeys =
-        storedRows
-          ?.map((row) => row.normalized_title)
-          .filter((key): key is string => typeof key === 'string' && !currentKeys.has(key)) ?? [];
-      if (staleKeys.length > 0) {
-        await client.from('wanted_manga').delete().eq('user_id', user.id).in('normalized_title', staleKeys);
+        .delete()
+        .eq('user_id', user.id)
+        .eq('normalized_title', normalizedTitle);
+      if (error) {
+        console.warn('Failed to delete wanted manga item.', error.message);
       }
+    },
+    [user],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrate = async () => {
+      setHydrated(false);
+      const storedItems = await AsyncStorage.getItem(storageKey);
+      let nextItems = parseStoredItems(storedItems);
+
+      if (supabase && user) {
+        const { data, error } = await supabase
+          .from('wanted_manga')
+          .select('id,title,normalized_title,score,note,purchase_url,created_at,updated_at')
+          .eq('user_id', user.id);
+        if (!error) {
+          nextItems = mergeItems(nextItems, (data ?? []).map(toWishlistItem));
+        }
+      }
+
+      if (cancelled) return;
+      setItems(nextItems);
+      setHydrated(true);
+      await AsyncStorage.setItem(storageKey, JSON.stringify(nextItems));
     };
 
-    void syncWishlist();
-  }, [hydrated, items, user]);
+    void hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, [storageKey, user]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    AsyncStorage.setItem(storageKey, JSON.stringify(items));
+  }, [hydrated, items, storageKey]);
 
   const value = useMemo(
     () => ({
@@ -121,42 +198,62 @@ export function WishlistProvider({ children }: PropsWithChildren) {
         const title = input.title.trim();
         if (!title) return;
         const now = new Date().toISOString();
-        setItems((current) => [
-          {
-            id: createId(),
-            title,
-            score: clampScore(input.score),
-            note: input.note?.trim() || undefined,
-            purchaseUrl: input.purchaseUrl?.trim() || undefined,
-            createdAt: now,
-            updatedAt: now,
-          },
-          ...current,
-        ]);
+        setItems((current) => {
+          const normalizedTitle = normalizeWantedTitle(title);
+          const existing = current.find((item) => normalizeWantedTitle(item.title) === normalizedTitle);
+          const nextItem: WishlistItem = existing
+            ? {
+                ...existing,
+                note: input.note?.trim() || existing.note,
+                purchaseUrl: input.purchaseUrl?.trim() || existing.purchaseUrl,
+                score: clampScore(input.score),
+                title,
+                updatedAt: now,
+              }
+            : {
+                id: createId(),
+                title,
+                score: clampScore(input.score),
+                note: input.note?.trim() || undefined,
+                purchaseUrl: input.purchaseUrl?.trim() || undefined,
+                createdAt: now,
+                updatedAt: now,
+              };
+
+          void persistCloudItem(nextItem);
+          return existing
+            ? current.map((item) => (item.id === existing.id ? nextItem : item))
+            : [nextItem, ...current];
+        });
       },
       deleteItem: (id: string) => {
-        setItems((current) => current.filter((item) => item.id !== id));
+        setItems((current) => {
+          const deletedItem = current.find((item) => item.id === id);
+          if (deletedItem) void deleteCloudItem(deletedItem);
+          return current.filter((item) => item.id !== id);
+        });
       },
       updateItem: (id: string, input: Partial<WishlistInput>) => {
         setItems((current) =>
-          current.map((item) =>
-            item.id === id
-              ? {
-                  ...item,
-                  ...(input.title !== undefined ? { title: input.title.trim() || item.title } : {}),
-                  ...(input.score !== undefined ? { score: clampScore(input.score) } : {}),
-                  ...(input.note !== undefined ? { note: input.note.trim() || undefined } : {}),
-                  ...(input.purchaseUrl !== undefined
-                    ? { purchaseUrl: input.purchaseUrl.trim() || undefined }
-                    : {}),
-                  updatedAt: new Date().toISOString(),
-                }
-              : item,
-          ),
+          current.map((item) => {
+            if (item.id !== id) return item;
+            const nextItem = {
+              ...item,
+              ...(input.title !== undefined ? { title: input.title.trim() || item.title } : {}),
+              ...(input.score !== undefined ? { score: clampScore(input.score) } : {}),
+              ...(input.note !== undefined ? { note: input.note.trim() || undefined } : {}),
+              ...(input.purchaseUrl !== undefined
+                ? { purchaseUrl: input.purchaseUrl.trim() || undefined }
+                : {}),
+              updatedAt: new Date().toISOString(),
+            };
+            void persistCloudItem(nextItem);
+            return nextItem;
+          }),
         );
       },
     }),
-    [items],
+    [deleteCloudItem, items, persistCloudItem],
   );
 
   return <WishlistContext.Provider value={value}>{children}</WishlistContext.Provider>;

@@ -20,6 +20,7 @@ import { useAppSettings } from '../../src/store/AppSettingsContext';
 import { useAuth } from '../../src/store/AuthContext';
 import { useLibrary } from '../../src/store/LibraryContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
+import { useWishlist } from '../../src/store/WishlistContext';
 import { Book, ReadingStatus, ShelfItem } from '../../src/types';
 
 const statusLabels: Record<ReadingStatus, string> = {
@@ -40,6 +41,7 @@ export default function SeriesScreen() {
   const { user } = useAuth();
   const { addBook, getSeriesItems, bulkUpdateStatus, updateBook, renameSeries, deleteBook, repairBookMetadata } =
     useLibrary();
+  const { addItem: addWishlistItem } = useWishlist();
   const {
     isFavoriteSeries,
     migrateFavoriteSeries,
@@ -122,6 +124,16 @@ export default function SeriesScreen() {
     }
   };
 
+  const addMissingToWishlist = (item: ShelfItem) => {
+    addWishlistItem({
+      title: item.volumeNumber ? `${item.seriesTitle} ${item.volumeNumber}巻` : item.title,
+      score: 75,
+      note: '巻抜けから追加',
+      purchaseUrl: buildPurchaseUrl(item.seriesTitle, item.volumeNumber),
+    });
+    Alert.alert('欲しいリストに追加しました', `${item.title}を購入候補として保存しました。`);
+  };
+
   const updateSelected = async (status: ReadingStatus) => {
     try {
       await bulkUpdateStatus(selectedIds, status);
@@ -163,7 +175,14 @@ export default function SeriesScreen() {
           .map((item) => item.volumeNumber)
           .filter((volume): volume is number => typeof volume === 'number')
           .sort((left, right) => right - left)[0];
-        await migrateNewReleaseSeriesSubscription(user.id, seriesTitle, nextTitle, latestVolume);
+        try {
+          await migrateNewReleaseSeriesSubscription(user.id, seriesTitle, nextTitle, latestVolume);
+        } catch (subscriptionError) {
+          console.warn(
+            'Failed to migrate new release subscription after series rename.',
+            subscriptionError instanceof Error ? subscriptionError.message : subscriptionError,
+          );
+        }
       }
       setRenameOpen(false);
       Alert.alert(
@@ -393,13 +412,13 @@ export default function SeriesScreen() {
                   )}
                 </View>
                 {missing && (
-                  <View style={styles.actionRow}>
+                  <View style={[styles.actionRow, styles.missingActionRow]}>
                     <Pressable
                       onPress={(event) => {
                         event.stopPropagation();
                         void openPurchaseCandidates(item);
                       }}
-                      style={[styles.smallButton, { borderColor: colors.primary }]}
+                      style={[styles.smallButton, styles.missingPrimaryButton, { borderColor: colors.primary }]}
                     >
                       <Text style={[styles.smallButtonText, { color: colors.primary }]}>購入候補</Text>
                     </Pressable>
@@ -411,6 +430,7 @@ export default function SeriesScreen() {
                       }}
                       style={[
                         styles.smallButton,
+                        styles.missingSecondaryButton,
                         { backgroundColor: colors.text, borderColor: colors.text },
                         refreshingId === item.id && styles.disabledButton,
                       ]}
@@ -418,6 +438,15 @@ export default function SeriesScreen() {
                       <Text style={[styles.smallButtonText, { color: colors.background }]}>
                         {refreshingId === item.id ? '検索中' : '所持に追加'}
                       </Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        addMissingToWishlist(item);
+                      }}
+                      style={[styles.smallButton, styles.missingSecondaryButton, { borderColor: colors.border }]}
+                    >
+                      <Text style={[styles.smallButtonText, { color: colors.text }]}>欲しいへ</Text>
                     </Pressable>
                   </View>
                 )}
@@ -600,6 +629,9 @@ const styles = StyleSheet.create({
   },
   saveButtonText: { fontSize: 13, fontWeight: '800' },
   actionRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  missingActionRow: { flexWrap: 'wrap' },
+  missingPrimaryButton: { minWidth: 96 },
+  missingSecondaryButton: { minWidth: 96 },
   smallButton: {
     alignItems: 'center',
     borderRadius: 8,

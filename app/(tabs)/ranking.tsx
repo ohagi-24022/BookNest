@@ -4,6 +4,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 
 import { BookCover } from '../../src/components/BookCover';
 import { supabase } from '../../src/lib/supabase';
+import { useAuth } from '../../src/store/AuthContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 import { useWishlist } from '../../src/store/WishlistContext';
 
@@ -20,6 +21,7 @@ type GlobalRankingRow = {
 
 export default function RankingScreen() {
   const { colors } = useAppTheme();
+  const { user } = useAuth();
   const { items } = useWishlist();
   const [globalRows, setGlobalRows] = useState<GlobalRankingRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -40,6 +42,11 @@ export default function RankingScreen() {
   );
 
   const loadRankings = async () => {
+    if (!user) {
+      setError('ランキングはログイン後に確認できます。少人数のデータが推測されないよう、ログインユーザー限定で表示しています。');
+      setGlobalRows([]);
+      return;
+    }
     if (!supabase) {
       setError('Supabaseが未設定のため、利用者ランキングを取得できません。');
       return;
@@ -59,7 +66,7 @@ export default function RankingScreen() {
 
   useEffect(() => {
     void loadRankings();
-  }, []);
+  }, [user]);
 
   return (
     <ScrollView
