@@ -13,6 +13,8 @@ It is designed for readers who buy manga, light novels, and other multi-volume s
 - Reading status management: unread, reading, read
 - Bulk status updates in series detail
 - Per-series favorite and new release notification settings
+- Wanted manga list with score-based priority ranking
+- Owned series and wanted manga ranking tab
 - Supabase Auth and PostgreSQL synchronization
 - Account deletion from the settings screen
 - CSV and JSON export
@@ -102,6 +104,8 @@ To run the checker on a schedule, store `project_url` and `function_key` in Supa
 -- see supabase/schedules/check-new-releases.sql
 ```
 
+`function_key` must be the Supabase service role key. The `check-new-releases` Edge Function rejects normal authenticated-user requests. If you use another trusted scheduler, you can also set `CHECK_NEW_RELEASES_SECRET` as a Supabase secret and send it in the `x-booknest-cron-secret` header.
+
 The checker reads enabled `series_subscriptions`, looks up the latest volume, sends Expo push notifications, and records results in `notification_logs`.
 
 The production notification flow is split into two phases:
@@ -125,6 +129,7 @@ Operational logs are stored in `server_operation_logs`:
 - `check-new-releases`: scheduled notification batch runs
 
 The settings screen shows a development-only diagnostics button for recent operation logs.
+The Rakuten Books proxy includes a small request-rate guard so a single caller cannot repeatedly hit the proxy in a short window.
 
 Migration should be considered when:
 
@@ -203,4 +208,5 @@ BookNest is under active development. Current focus areas are:
 - Better cover image retrieval for Japanese books
 - Missing volume workflow improvements
 - Scan confirmation and continuous registration improvements
-- Reading notes and reading history features
+- Wanted manga list and purchase candidate workflow improvements
+- Backup import and restore workflow

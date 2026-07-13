@@ -45,6 +45,7 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const SUPABASE_SERVICE_ROLE_KEY =
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ??
   JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS') ?? '{}').default;
+const CHECK_NEW_RELEASES_SECRET = Deno.env.get('CHECK_NEW_RELEASES_SECRET') ?? '';
 const FUNCTION_SECRET =
   SUPABASE_SERVICE_ROLE_KEY ?? Deno.env.get('SUPABASE_ANON_KEY') ?? '';
 
@@ -57,7 +58,7 @@ const LOG_RETENTION_DAYS = 90;
 const OPERATION_LOG_RETENTION_DAYS = 30;
 
 const corsHeaders = {
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-booknest-cron-secret, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Origin': '*',
 };
@@ -87,6 +88,26 @@ Deno.serve(async (request) => {
           ok: false,
         },
         200,
+      );
+    }
+
+    if (!isAuthorizedSchedulerRequest(request)) {
+      await writeOperationLog({
+        durationMs: Date.now() - startedAt,
+        metadata: { mode, reason: 'unauthorized' },
+        operation: 'check-new-releases',
+        provider: 'supabase-edge-function',
+        requestCount: 1,
+        status: 'error',
+      });
+      return jsonResponse(
+        {
+          checked: [],
+          delivered: [],
+          error: 'This function can only be executed by the scheduled worker.',
+          ok: false,
+        },
+        403,
       );
     }
 
@@ -332,6 +353,27 @@ async function safeJson(request: Request) {
 function normalizeMode(value: unknown): FunctionMode {
   if (value === 'check' || value === 'deliver' || value === 'all') return value;
   return 'all';
+}
+
+function isAuthorizedSchedulerRequest(request: Request) {
+  const cronSecret = request.headers.get('x-booknest-cron-secret') ?? '';
+  if (CHECK_NEW_RELEASES_SECRET && cronSecret === CHECK_NEW_RELEASES_SECRET) return true;
+
+  const token = (request.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '');
+  return getJwtRole(token) === 'service_role';
+}
+
+function getJwtRole(token: string) {
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return undefined;
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    const decoded = JSON.parse(atob(padded)) as { role?: string };
+    return decoded.role;
+  } catch {
+    return undefined;
+  }
 }
 
 function jsonResponse(body: unknown, status = 200) {

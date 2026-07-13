@@ -10,6 +10,8 @@ const SUPABASE_SERVICE_ROLE_KEY =
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ??
   JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS') ?? '{}').default;
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX_REQUESTS = 60;
 
 declare const Deno: {
   env: {
@@ -47,11 +49,27 @@ Deno.serve(async (request: Request) => {
     const appId = Deno.env.get('RAKUTEN_APP_ID');
     const accessKey = Deno.env.get('RAKUTEN_ACCESS_KEY');
     const referer = Deno.env.get('RAKUTEN_REFERER') ?? DEFAULT_REFERER;
+    const callerKey = getCallerKey(request);
+
+    if (!(await isWithinRateLimit(callerKey, request))) {
+      await writeOperationLog({
+        durationMs: Date.now() - startedAt,
+        metadata: { callerKey, reason: 'rate-limit' },
+        operation: 'external-api-proxy',
+        provider: 'Rakuten Books',
+        status: 'error',
+      });
+      return jsonResponse({
+        ok: false,
+        status: 429,
+        body: { error: 'RATE_LIMITED', message: 'Too many Rakuten Books requests. Please try again later.' },
+      });
+    }
 
     if (!appId || !accessKey) {
       await writeOperationLog({
         durationMs: Date.now() - startedAt,
-        metadata: { reason: 'missing-rakuten-secrets' },
+        metadata: { callerKey, reason: 'missing-rakuten-secrets' },
         operation: 'external-api-proxy',
         provider: 'Rakuten Books',
         status: 'error',
@@ -68,7 +86,7 @@ Deno.serve(async (request: Request) => {
     if (!path || !/^Books(?:Book|Total)\/Search\/20170404$/.test(path)) {
       await writeOperationLog({
         durationMs: Date.now() - startedAt,
-        metadata: { path },
+        metadata: { callerKey, path },
         operation: 'external-api-proxy',
         provider: 'Rakuten Books',
         status: 'error',
@@ -92,6 +110,7 @@ Deno.serve(async (request: Request) => {
     await writeOperationLog({
       durationMs: Date.now() - startedAt,
       metadata: {
+        callerKey,
         path,
         proxyVersion: PROXY_VERSION,
         refererConfigured: Boolean(referer),
@@ -142,6 +161,46 @@ Deno.serve(async (request: Request) => {
 
 function fetchRakuten(url: string, referer: string): Promise<{ status: number; text: string }> {
   return fetchRakutenOverRawTls(url, referer);
+}
+
+async function isWithinRateLimit(callerKey: string, request: Request) {
+  if (getJwtRoleFromRequest(request) === 'service_role') return true;
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return true;
+
+  const since = new Date(Date.now() - RATE_LIMIT_WINDOW_MS).toISOString();
+  const { count, error } = await supabase
+    .from('server_operation_logs')
+    .select('id', { count: 'exact', head: true })
+    .eq('operation', 'external-api-proxy')
+    .eq('provider', 'Rakuten Books')
+    .gte('created_at', since)
+    .contains('metadata', { callerKey });
+  if (error) return true;
+  return (count ?? 0) < RATE_LIMIT_MAX_REQUESTS;
+}
+
+function getCallerKey(request: Request) {
+  const token = (request.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '');
+  const subject = decodeJwt(token)?.sub;
+  if (subject) return `user:${subject}`;
+  return `anon:${request.headers.get('x-forwarded-for') ?? 'unknown'}`;
+}
+
+function getJwtRoleFromRequest(request: Request) {
+  const token = (request.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '');
+  return decodeJwt(token)?.role;
+}
+
+function decodeJwt(token: string) {
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return undefined;
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    return JSON.parse(atob(padded)) as { role?: string; sub?: string };
+  } catch {
+    return undefined;
+  }
 }
 
 async function writeOperationLog(input: {

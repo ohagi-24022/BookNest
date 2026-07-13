@@ -1,7 +1,12 @@
 -- Run this in the Supabase SQL editor after storing these Vault secrets:
 --
 -- select vault.create_secret('https://YOUR_PROJECT_REF.supabase.co', 'project_url');
--- select vault.create_secret('YOUR_SUPABASE_ANON_OR_SERVICE_ROLE_KEY', 'function_key');
+-- select vault.create_secret('YOUR_SUPABASE_SERVICE_ROLE_KEY', 'function_key');
+--
+-- `function_key` must be the service role key. The Edge Function rejects normal
+-- authenticated user requests. If you configure CHECK_NEW_RELEASES_SECRET in
+-- Supabase secrets, you can also send it as `x-booknest-cron-secret` from a
+-- trusted scheduler instead of using this SQL cron example.
 --
 -- Supabase scheduled functions use pg_cron + pg_net to call Edge Functions.
 

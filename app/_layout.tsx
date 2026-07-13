@@ -8,15 +8,18 @@ import { AppSettingsProvider } from '../src/store/AppSettingsContext';
 import { AuthProvider } from '../src/store/AuthContext';
 import { LibraryProvider } from '../src/store/LibraryContext';
 import { ThemeProvider, useAppTheme } from '../src/store/ThemeContext';
+import { WishlistProvider } from '../src/store/WishlistContext';
 
 export default function RootLayout() {
   return (
     <ThemeProvider>
       <AppSettingsProvider>
         <AuthProvider>
-          <LibraryProvider>
-            <RootStack />
-          </LibraryProvider>
+          <WishlistProvider>
+            <LibraryProvider>
+              <RootStack />
+            </LibraryProvider>
+          </WishlistProvider>
         </AuthProvider>
       </AppSettingsProvider>
     </ThemeProvider>

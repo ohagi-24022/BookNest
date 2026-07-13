@@ -21,6 +21,7 @@ type AppSettings = {
 
 type AppSettingsContextValue = AppSettings & {
   isFavoriteSeries: (seriesTitle: string) => boolean;
+  migrateFavoriteSeries: (fromSeriesTitle: string, toSeriesTitle: string) => void;
   setNewReleaseNotifications: (value: boolean) => void;
   setOpenExternalPurchaseLinks: (value: boolean) => void;
   setShowPublishedLatestVolume: (value: boolean) => void;
@@ -67,6 +68,21 @@ export function AppSettingsProvider({ children }: PropsWithChildren) {
       ...settings,
       isFavoriteSeries: (seriesTitle: string) =>
         settings.favoriteSeriesKeys.includes(normalizeSeriesKey(seriesTitle)),
+      migrateFavoriteSeries: (fromSeriesTitle: string, toSeriesTitle: string) => {
+        const fromKey = normalizeSeriesKey(fromSeriesTitle);
+        const toKey = normalizeSeriesKey(toSeriesTitle);
+        if (!fromKey || !toKey || fromKey === toKey) return;
+        setSettings((current) => {
+          if (!current.favoriteSeriesKeys.includes(fromKey)) return current;
+          return {
+            ...current,
+            favoriteSeriesKeys: [
+              ...current.favoriteSeriesKeys.filter((key) => key !== fromKey && key !== toKey),
+              toKey,
+            ],
+          };
+        });
+      },
       setNewReleaseNotifications: (newReleaseNotifications: boolean) =>
         setSettings((current) => ({ ...current, newReleaseNotifications })),
       setOpenExternalPurchaseLinks: (openExternalPurchaseLinks: boolean) =>

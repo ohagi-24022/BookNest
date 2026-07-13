@@ -211,11 +211,28 @@ export async function getNewReleaseSubscriptions(userId: string) {
 export async function syncNewReleaseSubscriptions(userId: string, seriesGroups: SeriesGroup[]) {
   if (!supabase) return;
   const subscriptions = buildSeriesSubscriptions(seriesGroups);
-  if (subscriptions.length === 0) return;
   const existingSubscriptions = await getNewReleaseSubscriptions(userId);
   const existingByKey = new Map(
     existingSubscriptions.map((subscription) => [subscription.seriesKey, subscription]),
   );
+  const currentSeriesKeys = new Set(subscriptions.map((subscription) => subscription.seriesKey));
+
+  const staleSubscriptions = existingSubscriptions.filter(
+    (subscription) => !currentSeriesKeys.has(subscription.seriesKey) && subscription.enabled,
+  );
+  if (staleSubscriptions.length > 0) {
+    const { error: staleError } = await supabase
+      .from('series_subscriptions')
+      .update({ enabled: false, updated_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .in(
+        'series_key',
+        staleSubscriptions.map((subscription) => subscription.seriesKey),
+      );
+    if (staleError) throw new Error('古い通知対象シリーズを整理できませんでした。');
+  }
+
+  if (subscriptions.length === 0) return;
 
   const { error } = await supabase.from('series_subscriptions').upsert(
     subscriptions.map((subscription) => ({
@@ -229,6 +246,42 @@ export async function syncNewReleaseSubscriptions(userId: string, seriesGroups: 
     { onConflict: 'user_id,series_key' },
   );
   if (error) throw new Error('通知対象シリーズを同期できませんでした。');
+}
+
+export async function migrateNewReleaseSeriesSubscription(
+  userId: string,
+  fromSeriesTitle: string,
+  toSeriesTitle: string,
+  latestVolume?: number,
+) {
+  if (!supabase) return;
+  const fromSeriesKey = normalizeSeriesKey(fromSeriesTitle);
+  const toSeriesKey = normalizeSeriesKey(toSeriesTitle);
+  if (!fromSeriesKey || !toSeriesKey || fromSeriesKey === toSeriesKey) return;
+
+  const existingSubscriptions = await getNewReleaseSubscriptions(userId);
+  const existing = existingSubscriptions.find((subscription) => subscription.seriesKey === fromSeriesKey);
+  if (!existing) return;
+
+  const { error: upsertError } = await supabase.from('series_subscriptions').upsert(
+    {
+      enabled: existing.enabled,
+      latest_known_volume: latestVolume ?? existing.latestVolume ?? null,
+      series_key: toSeriesKey,
+      series_title: toSeriesTitle,
+      updated_at: new Date().toISOString(),
+      user_id: userId,
+    },
+    { onConflict: 'user_id,series_key' },
+  );
+  if (upsertError) throw new Error('変更後のシリーズ通知設定を保存できませんでした。');
+
+  const { error: deleteError } = await supabase
+    .from('series_subscriptions')
+    .delete()
+    .eq('user_id', userId)
+    .eq('series_key', fromSeriesKey);
+  if (deleteError) throw new Error('変更前のシリーズ通知設定を整理できませんでした。');
 }
 
 export async function setNewReleaseSeriesSubscription(

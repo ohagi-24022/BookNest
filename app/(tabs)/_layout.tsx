@@ -36,6 +36,16 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="wishlist"
+        options={{
+          title: '欲しい',
+          tabBarLabel: '欲しい',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons color={color} name={focused ? 'cart' : 'cart-outline'} size={24} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="scan"
         options={{
           title: 'スキャン',
@@ -78,6 +88,16 @@ export default function TabLayout() {
           tabBarItemStyle: {
             marginTop: -18,
           },
+        }}
+      />
+      <Tabs.Screen
+        name="ranking"
+        options={{
+          title: '順位',
+          tabBarLabel: '順位',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons color={color} name={focused ? 'podium' : 'podium-outline'} size={24} />
+          ),
         }}
       />
       <Tabs.Screen

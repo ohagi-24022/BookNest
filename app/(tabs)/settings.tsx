@@ -21,7 +21,6 @@ import {
   enableNewReleaseNotifications,
   getNewReleaseDiagnostics,
   getServerOperationDiagnostics,
-  runNewReleaseCheck,
   sendNewReleaseDebugNotification,
   syncNewReleaseSubscriptions,
 } from '../../src/lib/newReleaseNotifications';
@@ -57,7 +56,6 @@ export default function SettingsScreen() {
   const [password, setPassword] = useState('');
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [migrationSubmitting, setMigrationSubmitting] = useState(false);
-  const [newReleaseCheckSubmitting, setNewReleaseCheckSubmitting] = useState(false);
   const [notificationDebugSubmitting, setNotificationDebugSubmitting] = useState(false);
   const [notificationSubmitting, setNotificationSubmitting] = useState(false);
   const [operationDiagnosticsSubmitting, setOperationDiagnosticsSubmitting] = useState(false);
@@ -211,36 +209,18 @@ export default function SettingsScreen() {
     }
   };
 
-  const runNewReleaseDebug = async () => {
+  const showNewReleaseDebugGuide = async () => {
     if (!user) {
       Alert.alert('ログインが必要です', '新刊チェックの確認はログイン後に利用できます。');
       return;
     }
 
-    setNewReleaseCheckSubmitting(true);
     try {
       await syncNewReleaseSubscriptions(user.id, seriesGroups);
-      const beforeDiagnostics = await getNewReleaseDiagnostics(user.id);
-      const result = await runNewReleaseCheck(10);
-      const afterDiagnostics = await getNewReleaseDiagnostics(user.id);
-      const checked = result.checked ?? [];
-      const checkedSummary =
-        checked.length > 0
-          ? checked
-              .slice(0, 5)
-              .map(
-                (item) =>
-                  item.error
-                    ? `${item.seriesTitle}: エラー ${item.error}`
-                    : `${item.seriesTitle}: ${
-                        item.latestVolume ? `${item.latestVolume}巻` : '最新巻不明'
-                      } / 詳細${item.queued ?? item.notified ?? 0}件`,
-              )
-              .join('\n')
-          : '今回チェックされた通知対象シリーズはありません。';
+      const diagnostics = await getNewReleaseDiagnostics(user.id);
       const recentLogs =
-        afterDiagnostics.recentLogs.length > 0
-          ? afterDiagnostics.recentLogs
+        diagnostics.recentLogs.length > 0
+          ? diagnostics.recentLogs
               .map(
                 (log) =>
                   `${log.seriesTitle}${log.volumeNumber ? ` ${log.volumeNumber}巻` : ''}: ${log.status}`,
@@ -249,18 +229,16 @@ export default function SettingsScreen() {
           : '通知ログはまだありません。';
 
       Alert.alert(
-        '新刊チェック結果',
+        '新刊チェックの状態',
         [
-          `通知ONシリーズ: ${afterDiagnostics.enabledSeriesCount} / ${afterDiagnostics.subscriptionCount}`,
-          `有効な通知トークン: ${afterDiagnostics.activePushTokenCount}`,
-          `今回の確認件数: ${checked.length}`,
-          '',
-          checkedSummary,
+          `通知ONシリーズ: ${diagnostics.enabledSeriesCount} / ${diagnostics.subscriptionCount}`,
+          `有効な通知トークン: ${diagnostics.activePushTokenCount}`,
           '',
           `直近ログ:\n${recentLogs}`,
-          beforeDiagnostics.enabledSeriesCount === 0
+          diagnostics.enabledSeriesCount === 0
             ? '\n本棚のシリーズカードでベルをONにすると、チェック対象になります。'
             : '',
+          '\n全体チェックはservice roleまたは専用secretを持つ定期実行だけが実行できます。',
         ]
           .filter(Boolean)
           .join('\n'),
@@ -270,8 +248,6 @@ export default function SettingsScreen() {
         '新刊チェックに失敗しました',
         error instanceof Error ? error.message : 'Supabase Functions の状態を確認してください。',
       );
-    } finally {
-      setNewReleaseCheckSubmitting(false);
     }
   };
 
@@ -330,12 +306,14 @@ export default function SettingsScreen() {
                   <Ionicons color={colors.text} name="person-circle-outline" size={22} />
                 </View>
                 <View style={styles.rowText}>
-                  <Text style={[styles.rowTitle, { color: colors.text }]}>ユーザーページ</Text>
+                  <View style={styles.linkTitleRow}>
+                    <Ionicons color={colors.muted} name="chevron-forward" size={16} />
+                    <Text style={[styles.rowTitle, { color: colors.text }]}>ユーザーページ</Text>
+                  </View>
                   <Text style={[styles.rowCopy, { color: colors.muted }]}>
                     通知履歴、アカウント情報、アカウント削除を確認できます。
                   </Text>
                 </View>
-                <Ionicons color={colors.muted} name="chevron-forward" size={18} />
               </Pressable>
             </Link>
             <Pressable disabled={authSubmitting} style={[styles.neutralButton, { borderColor: colors.border }]} onPress={submitSignOut}>
@@ -503,6 +481,7 @@ export default function SettingsScreen() {
           >
             <View style={styles.rowText}>
               <View style={styles.helpTitleRow}>
+                <Ionicons color={colors.muted} name="chevron-forward" size={16} />
                 <Text style={[styles.rowTitle, { color: colors.text }]}>BookNestの使い方</Text>
                 <Ionicons color={colors.muted} name="help-circle-outline" size={17} />
               </View>
@@ -510,7 +489,6 @@ export default function SettingsScreen() {
                 登録、本棚、シリーズ編集などの操作を確認できます。
               </Text>
             </View>
-            <Text style={[styles.helpArrow, { color: colors.muted }]}>›</Text>
           </Pressable>
         </Link>
       </View>
@@ -574,20 +552,20 @@ export default function SettingsScreen() {
         {__DEV__ && (
           <>
             <Pressable
-              disabled={newReleaseCheckSubmitting || !configured}
-              onPress={() => void runNewReleaseDebug()}
+              disabled={!configured}
+              onPress={() => void showNewReleaseDebugGuide()}
               style={[
                 styles.neutralButton,
                 { borderColor: colors.border },
-                (newReleaseCheckSubmitting || !configured) && styles.disabledButton,
+                !configured && styles.disabledButton,
               ]}
             >
               <Text style={[styles.neutralButtonText, { color: colors.text }]}>
-                {newReleaseCheckSubmitting ? '新刊チェック中' : '新刊チェックを手動実行'}
+                新刊チェック状態を見る
               </Text>
             </Pressable>
             <Text style={[styles.rowCopy, { color: colors.muted }]}>
-              開発用にEdge Functionを1回実行し、通知対象数と直近ログを確認します。
+              全体チェックの実行は、定期実行用のsecretまたはservice roleを持つサーバー側だけに制限しています。
             </Text>
           </>
         )}
@@ -693,7 +671,7 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   helpTitleRow: { alignItems: 'center', flexDirection: 'row', gap: 6 },
-  helpArrow: { fontSize: 28, fontWeight: '300' },
+  linkTitleRow: { alignItems: 'center', flexDirection: 'row', gap: 4 },
   helpCopy: { fontSize: 13, lineHeight: 18, marginTop: 3 },
   segmented: {
     borderRadius: 8,

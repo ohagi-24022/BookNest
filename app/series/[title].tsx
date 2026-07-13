@@ -15,7 +15,9 @@ import {
 
 import { BookCover } from '../../src/components/BookCover';
 import { buildPurchaseUrl, lookupBookByTitle } from '../../src/lib/bookApis';
+import { migrateNewReleaseSeriesSubscription } from '../../src/lib/newReleaseNotifications';
 import { useAppSettings } from '../../src/store/AppSettingsContext';
+import { useAuth } from '../../src/store/AuthContext';
 import { useLibrary } from '../../src/store/LibraryContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 import { Book, ReadingStatus, ShelfItem } from '../../src/types';
@@ -35,10 +37,12 @@ export default function SeriesScreen() {
   const navigation = useNavigation();
   const router = useRouter();
   const seriesTitle = decodeURIComponent(params.title ?? '');
+  const { user } = useAuth();
   const { addBook, getSeriesItems, bulkUpdateStatus, updateBook, renameSeries, deleteBook, repairBookMetadata } =
     useLibrary();
   const {
     isFavoriteSeries,
+    migrateFavoriteSeries,
     openExternalPurchaseLinks,
     toggleFavoriteSeries,
   } = useAppSettings();
@@ -151,13 +155,22 @@ export default function SeriesScreen() {
 
   const submitSeriesRename = async () => {
     try {
+      const nextTitle = draftSeriesTitle.trim();
       const updatedCount = await renameSeries(seriesTitle, draftSeriesTitle);
+      migrateFavoriteSeries(seriesTitle, nextTitle);
+      if (user) {
+        const latestVolume = ownedItems
+          .map((item) => item.volumeNumber)
+          .filter((volume): volume is number => typeof volume === 'number')
+          .sort((left, right) => right - left)[0];
+        await migrateNewReleaseSeriesSubscription(user.id, seriesTitle, nextTitle, latestVolume);
+      }
       setRenameOpen(false);
       Alert.alert(
         'シリーズ名を更新しました',
-        `${updatedCount}冊を「${draftSeriesTitle.trim()}」へ移しました。`,
+        `${updatedCount}冊を「${nextTitle}」へ移しました。`,
       );
-      router.replace(`/series/${encodeURIComponent(draftSeriesTitle.trim())}`);
+      router.replace(`/series/${encodeURIComponent(nextTitle)}`);
     } catch (error) {
       Alert.alert('BookNest', error instanceof Error ? error.message : 'シリーズ名の更新に失敗しました。');
     }
