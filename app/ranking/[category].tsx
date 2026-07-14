@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { RankingCard } from '../../src/components/RankingCard';
+import { buildPurchaseUrl } from '../../src/lib/bookApis';
 import {
   buildRankingRows,
   GlobalRankingRow,
@@ -26,13 +27,14 @@ export default function RankingCategoryScreen() {
   const category = parseCategory(rawCategory);
   const { colors } = useAppTheme();
   const { user } = useAuth();
-  const { items } = useWishlist();
+  const { addItem, items } = useWishlist();
   const [globalRows, setGlobalRows] = useState<GlobalRankingRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const label = rankingCategoryLabels[category];
 
   const rows = useMemo(() => buildRankingRows(category, globalRows, items), [category, globalRows, items]);
+  const addedTitles = useMemo(() => new Set(items.map((item) => normalizeRankingTitle(item.title))), [items]);
 
   const loadRankings = async () => {
     if (category === 'personal') {
@@ -99,13 +101,33 @@ export default function RankingCategoryScreen() {
         ) : (
           <View style={styles.list}>
             {rows.map((row, index) => (
-              <RankingCard key={`${category}-${row.title}-${index}`} index={index} row={row} />
+              <RankingCard
+                key={`${category}-${row.title}-${index}`}
+                added={addedTitles.has(normalizeRankingTitle(row.title))}
+                index={index}
+                onAddWishlist={
+                  category === 'personal'
+                    ? undefined
+                    : () =>
+                        addItem({
+                          title: row.title,
+                          score: row.score ?? 75,
+                          coverUrl: row.coverUrl,
+                          purchaseUrl: buildPurchaseUrl(row.title),
+                        })
+                }
+                row={row}
+              />
             ))}
           </View>
         )}
       </ScrollView>
     </>
   );
+}
+
+function normalizeRankingTitle(value: string) {
+  return value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 function EmptyState({

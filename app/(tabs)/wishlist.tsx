@@ -1,6 +1,7 @@
+import { useScrollToTop } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as WebBrowser from 'expo-web-browser';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -50,9 +51,19 @@ export default function WishlistScreen() {
   const [editingTitle, setEditingTitle] = useState('');
   const [editingNote, setEditingNote] = useState('');
   const [lastDeleted, setLastDeleted] = useState<WishlistItem | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const tabScrollToTopRef = useRef({
+    scrollToTop: () => scrollRef.current?.scrollTo({ y: 0, animated: true }),
+  });
 
   const trimmedTitle = title.trim();
-  const topItems = useMemo(() => items.slice(0, 3), [items]);
+  const topItems = useMemo(() => items.slice(0, 5), [items]);
+  const highPriorityCount = useMemo(() => items.filter((item) => item.score >= 90).length, [items]);
+  const averageScore = useMemo(() => {
+    if (items.length === 0) return 0;
+    return Math.round(items.reduce((sum, item) => sum + item.score, 0) / items.length);
+  }, [items]);
+  useScrollToTop(tabScrollToTopRef);
   const coverByTitle = useMemo(() => {
     const map = new Map<string, { coverUrl: string; rank: number }>();
     const sortedBooks = [...books].sort((left, right) => {
@@ -143,6 +154,7 @@ export default function WishlistScreen() {
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={[styles.screen, { backgroundColor: colors.background }]}
       contentContainerStyle={styles.content}
     >
@@ -151,6 +163,25 @@ export default function WishlistScreen() {
         <Text style={[styles.copy, { color: colors.muted }]}>
           タイトルを入れて優先度を選ぶだけで、購入候補として残せます。
         </Text>
+      </View>
+
+      <View style={[styles.overview, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <View style={styles.overviewMain}>
+          <View style={[styles.overviewIcon, { backgroundColor: colors.text }]}>
+            <Ionicons color={colors.background} name="cart-outline" size={22} />
+          </View>
+          <View style={styles.overviewText}>
+            <Text style={[styles.overviewTitle, { color: colors.text }]}>次に買いたい本を整理</Text>
+            <Text style={[styles.copy, { color: colors.muted }]}>
+              優先度を付けておくと、セールや書店で迷いにくくなります。
+            </Text>
+          </View>
+        </View>
+        <View style={styles.statRow}>
+          <StatBox label="候補" value={`${items.length}`} />
+          <StatBox label="最優先" value={`${highPriorityCount}`} />
+          <StatBox label="平均" value={items.length > 0 ? `${averageScore}点` : '-'} />
+        </View>
       </View>
 
       <View style={[styles.quickAdd, { backgroundColor: colors.elevated }]}>
@@ -226,15 +257,35 @@ export default function WishlistScreen() {
       ) : null}
 
       {topItems.length > 0 ? (
-        <View style={[styles.summary, { borderColor: colors.border }]}>
-          <Text style={[styles.summaryTitle, { color: colors.text }]}>今の上位候補</Text>
-          <View style={styles.summaryList}>
-            {topItems.map((item, index) => (
-              <Text key={item.id} style={[styles.summaryText, { color: colors.muted }]}>
-                {index + 1}. {item.title}
-              </Text>
-            ))}
+        <View style={styles.topSection}>
+          <View style={styles.sectionTitleRow}>
+            <Text style={[styles.summaryTitle, { color: colors.text }]}>今の上位候補</Text>
+            <Text style={[styles.copyStrong, { color: colors.muted }]}>上位{topItems.length}件</Text>
           </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.topCandidateList}
+          >
+            {topItems.map((item, index) => (
+              <View key={item.id} style={[styles.topCandidateCard, { borderColor: colors.border }]}>
+                <View style={styles.topCoverWrap}>
+                  <BookCover
+                    thumbnailUrl={findCoverUrl(item.title) ?? item.coverUrl}
+                    style={styles.topCover}
+                    placeholderText="No Cover"
+                  />
+                  <View style={[styles.topRankBadge, { backgroundColor: colors.text }]}>
+                    <Text style={[styles.topRankText, { color: colors.background }]}>#{index + 1}</Text>
+                  </View>
+                </View>
+                <Text style={[styles.topCandidateTitle, { color: colors.text }]} numberOfLines={2}>
+                  {item.title}
+                </Text>
+                <Text style={[styles.copyStrong, { color: colors.muted }]}>{item.score}点</Text>
+              </View>
+            ))}
+          </ScrollView>
         </View>
       ) : null}
 
@@ -245,6 +296,20 @@ export default function WishlistScreen() {
           <Text style={[styles.copy, { color: colors.muted }]}>
             気になった作品をここに置いておくと、あとで優先順位と購入先をすぐ確認できます。
           </Text>
+          <View style={styles.emptyHints}>
+            <View style={[styles.emptyHint, { backgroundColor: colors.elevated }]}>
+              <Ionicons color={colors.text} name="add-circle-outline" size={16} />
+              <Text style={[styles.copyStrong, { color: colors.text }]}>タイトルを入力</Text>
+            </View>
+            <View style={[styles.emptyHint, { backgroundColor: colors.elevated }]}>
+              <Ionicons color={colors.text} name="star-outline" size={16} />
+              <Text style={[styles.copyStrong, { color: colors.text }]}>優先度を選択</Text>
+            </View>
+            <View style={[styles.emptyHint, { backgroundColor: colors.elevated }]}>
+              <Ionicons color={colors.text} name="open-outline" size={16} />
+              <Text style={[styles.copyStrong, { color: colors.text }]}>購入候補へ</Text>
+            </View>
+          </View>
         </View>
       ) : (
         <View style={styles.list}>
@@ -318,20 +383,22 @@ export default function WishlistScreen() {
                 >
                   <Ionicons color={colors.text} name="create-outline" size={16} />
                 </Pressable>
-                <Pressable
-                  accessibilityLabel={`${item.title}の優先度を上げる`}
-                  onPress={() => updateItem(item.id, { score: item.score + 5 })}
-                  style={[styles.iconButton, { borderColor: colors.border }]}
-                >
-                  <Ionicons color={colors.text} name="arrow-up" size={16} />
-                </Pressable>
-                <Pressable
-                  accessibilityLabel={`${item.title}の優先度を下げる`}
-                  onPress={() => updateItem(item.id, { score: item.score - 5 })}
-                  style={[styles.iconButton, { borderColor: colors.border }]}
-                >
-                  <Ionicons color={colors.text} name="arrow-down" size={16} />
-                </Pressable>
+                <View style={styles.scoreButtons}>
+                  <Pressable
+                    accessibilityLabel={`${item.title}の優先度を上げる`}
+                    onPress={() => updateItem(item.id, { score: item.score + 5 })}
+                    style={[styles.iconButton, { borderColor: colors.border }]}
+                  >
+                    <Ionicons color={colors.text} name="arrow-up" size={16} />
+                  </Pressable>
+                  <Pressable
+                    accessibilityLabel={`${item.title}の優先度を下げる`}
+                    onPress={() => updateItem(item.id, { score: item.score - 5 })}
+                    style={[styles.iconButton, { borderColor: colors.border }]}
+                  >
+                    <Ionicons color={colors.text} name="arrow-down" size={16} />
+                  </Pressable>
+                </View>
                 <Pressable
                   accessibilityLabel={`${item.title}を削除`}
                   onPress={() => removeItem(item)}
@@ -348,6 +415,17 @@ export default function WishlistScreen() {
   );
 }
 
+function StatBox({ label, value }: { label: string; value: string }) {
+  const { colors } = useAppTheme();
+
+  return (
+    <View style={[styles.statBox, { backgroundColor: colors.elevated }]}>
+      <Text style={[styles.statValue, { color: colors.text }]}>{value}</Text>
+      <Text style={[styles.statLabel, { color: colors.muted }]}>{label}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   content: { gap: 16, padding: 18, paddingBottom: 40 },
@@ -355,6 +433,21 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: '900' },
   copy: { fontSize: 13, lineHeight: 18 },
   copyStrong: { fontSize: 13, fontWeight: '800', lineHeight: 18 },
+  overview: { borderRadius: 8, borderWidth: 1, gap: 14, padding: 14 },
+  overviewMain: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  overviewIcon: {
+    alignItems: 'center',
+    borderRadius: 8,
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
+  },
+  overviewText: { flex: 1, gap: 3 },
+  overviewTitle: { fontSize: 16, fontWeight: '900' },
+  statRow: { flexDirection: 'row', gap: 8 },
+  statBox: { alignItems: 'center', borderRadius: 8, flex: 1, gap: 2, minHeight: 56, justifyContent: 'center' },
+  statValue: { fontSize: 17, fontWeight: '900' },
+  statLabel: { fontSize: 11, fontWeight: '800' },
   quickAdd: { borderRadius: 8, gap: 12, padding: 12 },
   inputRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
   titleInput: { borderRadius: 8, flex: 1, fontSize: 16, height: 46, paddingHorizontal: 12 },
@@ -387,12 +480,36 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     textAlignVertical: 'top',
   },
-  summary: { borderRadius: 8, borderWidth: 1, gap: 8, padding: 12 },
+  topSection: { gap: 10 },
+  sectionTitleRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
   summaryTitle: { fontSize: 15, fontWeight: '900' },
-  summaryList: { gap: 4 },
-  summaryText: { fontSize: 13, lineHeight: 18 },
+  topCandidateList: { gap: 10, paddingRight: 8 },
+  topCandidateCard: { borderRadius: 8, borderWidth: 1, gap: 7, padding: 10, width: 124 },
+  topCoverWrap: { alignItems: 'center' },
+  topCover: { borderRadius: 6, height: 132, width: 90 },
+  topRankBadge: {
+    alignItems: 'center',
+    borderRadius: 999,
+    bottom: 6,
+    height: 26,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 8,
+    width: 42,
+  },
+  topRankText: { fontSize: 12, fontWeight: '900' },
+  topCandidateTitle: { fontSize: 13, fontWeight: '900', lineHeight: 18, minHeight: 36 },
   emptyBox: { alignItems: 'center', borderRadius: 8, borderWidth: 1, gap: 6, padding: 18 },
   emptyTitle: { fontSize: 16, fontWeight: '800' },
+  emptyHints: { alignSelf: 'stretch', gap: 8, marginTop: 8 },
+  emptyHint: {
+    alignItems: 'center',
+    borderRadius: 8,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 38,
+    paddingHorizontal: 12,
+  },
   list: { gap: 10 },
   card: { borderRadius: 8, borderWidth: 1, gap: 10, padding: 12 },
   cardHeader: { alignItems: 'flex-start', flexDirection: 'row', gap: 12 },
@@ -426,7 +543,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 12,
   },
-  editBox: { gap: 8, marginLeft: 104 },
+  editBox: { gap: 8, marginLeft: 116 },
   editInput: { borderRadius: 8, fontSize: 15, height: 42, paddingHorizontal: 12 },
   editNoteInput: {
     borderRadius: 8,
@@ -437,7 +554,8 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   editActions: { flexDirection: 'row', gap: 8, justifyContent: 'flex-end' },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginLeft: 104 },
+  actions: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginLeft: 116 },
+  scoreButtons: { flexDirection: 'row', gap: 8 },
   smallButton: {
     alignItems: 'center',
     borderRadius: 8,

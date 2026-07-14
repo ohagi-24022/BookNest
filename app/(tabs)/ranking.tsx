@@ -1,9 +1,11 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useScrollToTop } from '@react-navigation/native';
 import { router } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { RankingCard } from '../../src/components/RankingCard';
+import { buildPurchaseUrl } from '../../src/lib/bookApis';
 import {
   buildRankingRows,
   GlobalRankingRow,
@@ -19,10 +21,17 @@ import { useWishlist } from '../../src/store/WishlistContext';
 export default function RankingScreen() {
   const { colors } = useAppTheme();
   const { user } = useAuth();
-  const { items } = useWishlist();
+  const { addItem, items } = useWishlist();
   const [globalRows, setGlobalRows] = useState<GlobalRankingRow[]>([]);
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const tabScrollToTopRef = useRef({
+    scrollToTop: () => scrollRef.current?.scrollTo({ y: 0, animated: true }),
+  });
+  const addedTitles = useMemo(() => new Set(items.map((item) => normalizeRankingTitle(item.title))), [items]);
+  useScrollToTop(tabScrollToTopRef);
 
   const sections = useMemo(
     () =>
@@ -63,10 +72,11 @@ export default function RankingScreen() {
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={[styles.screen, { backgroundColor: colors.background }]}
       contentContainerStyle={styles.content}
     >
-      <View style={styles.header}>
+      <Pressable onPress={() => setExpandedKey(null)} style={styles.header}>
         <View style={styles.titleRow}>
           <Text style={[styles.title, { color: colors.text }]}>ランキング</Text>
           <Pressable
@@ -84,7 +94,7 @@ export default function RankingScreen() {
         <Text style={[styles.copy, { color: colors.muted }]}>
           カテゴリごとに上位10件を表示します。もっと見るから各ランキングをまとめて確認できます。
         </Text>
-      </View>
+      </Pressable>
 
       {error ? <EmptyState icon="cloud-offline-outline" text={error} /> : null}
 
@@ -92,7 +102,22 @@ export default function RankingScreen() {
         <RankingShelf
           key={section.category}
           category={section.category}
+          addedTitles={addedTitles}
           description={section.description}
+          expandedKey={expandedKey}
+          onAddWishlist={
+            section.category === 'personal'
+              ? undefined
+              : (row) =>
+                  addItem({
+                    title: row.title,
+                    score: row.score ?? 75,
+                    coverUrl: row.coverUrl,
+                    purchaseUrl: buildPurchaseUrl(row.title),
+                  })
+          }
+          onClearExpanded={() => setExpandedKey(null)}
+          onToggleExpanded={(key) => setExpandedKey((current) => (current === key ? null : key))}
           rows={section.rows}
           title={section.title}
         />
@@ -102,13 +127,23 @@ export default function RankingScreen() {
 }
 
 function RankingShelf({
+  addedTitles,
   category,
   description,
+  expandedKey,
+  onAddWishlist,
+  onClearExpanded,
+  onToggleExpanded,
   rows,
   title,
 }: {
+  addedTitles: Set<string>;
   category: RankingCategory;
   description: string;
+  expandedKey: string | null;
+  onAddWishlist?: (row: ReturnType<typeof buildRankingRows>[number]) => void;
+  onClearExpanded: () => void;
+  onToggleExpanded: (key: string) => void;
   rows: ReturnType<typeof buildRankingRows>;
   title: string;
 }) {
@@ -117,22 +152,12 @@ function RankingShelf({
 
   return (
     <View style={styles.section}>
-      <View style={styles.sectionHeader}>
+      <Pressable onPress={onClearExpanded} style={styles.sectionHeader}>
         <View style={styles.sectionTitleBlock}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>{title}</Text>
           <Text style={[styles.copy, { color: colors.muted }]}>{description}</Text>
         </View>
-        {rows.length > 10 ? (
-          <Pressable
-            accessibilityLabel={`${title}をもっと見る`}
-            onPress={() => router.push(`/ranking/${category}`)}
-            style={[styles.moreButton, { borderColor: colors.border }]}
-          >
-            <Text style={[styles.moreText, { color: colors.text }]}>もっと見る</Text>
-            <Ionicons color={colors.text} name="chevron-forward" size={15} />
-          </Pressable>
-        ) : null}
-      </View>
+      </Pressable>
 
       {topRows.length === 0 ? (
         <EmptyState icon="podium-outline" text="まだ表示できるデータがありません。" />
@@ -142,13 +167,40 @@ function RankingShelf({
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.horizontalList}
         >
-          {topRows.map((row, index) => (
-            <RankingCard key={`${category}-${row.title}-${index}`} index={index} row={row} variant="compact" />
-          ))}
+          {topRows.map((row, index) => {
+            const key = `${category}-${row.title}-${index}`;
+            return (
+              <RankingCard
+                key={key}
+                added={addedTitles.has(normalizeRankingTitle(row.title))}
+                expanded={expandedKey === key}
+                index={index}
+                onAddWishlist={onAddWishlist ? () => onAddWishlist(row) : undefined}
+                onPress={onAddWishlist ? () => onToggleExpanded(key) : undefined}
+                row={row}
+                variant="compact"
+              />
+            );
+          })}
+          {rows.length > 10 ? (
+            <Pressable
+              accessibilityLabel={`${title}をもっと見る`}
+              onPress={() => router.push(`/ranking/${category}`)}
+              style={[styles.moreTailCard, { borderColor: colors.border }]}
+            >
+              <Ionicons color={colors.text} name="chevron-forward-circle-outline" size={24} />
+              <Text style={[styles.moreTailText, { color: colors.text }]}>もっと見る</Text>
+              <Text style={[styles.moreTailSubText, { color: colors.muted }]}>11位以降</Text>
+            </Pressable>
+          ) : null}
         </ScrollView>
       )}
     </View>
   );
+}
+
+function normalizeRankingTitle(value: string) {
+  return value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 function EmptyState({
@@ -170,7 +222,7 @@ function EmptyState({
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  content: { gap: 22, padding: 18, paddingBottom: 40 },
+  content: { gap: 30, padding: 18, paddingBottom: 40 },
   header: { gap: 5 },
   titleRow: { alignItems: 'center', flexDirection: 'row', gap: 10 },
   title: { flex: 1, fontSize: 24, fontWeight: '900' },
@@ -183,20 +235,22 @@ const styles = StyleSheet.create({
     width: 36,
   },
   copy: { fontSize: 13, lineHeight: 18 },
-  section: { gap: 10 },
+  section: { gap: 12 },
   sectionHeader: { alignItems: 'flex-start', flexDirection: 'row', gap: 12 },
   sectionTitleBlock: { flex: 1, gap: 3 },
   sectionTitle: { fontSize: 18, fontWeight: '900' },
-  moreButton: {
+  moreTailCard: {
     alignItems: 'center',
-    borderRadius: 999,
+    borderRadius: 8,
     borderWidth: 1,
-    flexDirection: 'row',
-    gap: 3,
-    minHeight: 34,
-    paddingHorizontal: 10,
+    gap: 6,
+    height: 196,
+    justifyContent: 'center',
+    padding: 10,
+    width: 136,
   },
-  moreText: { fontSize: 12, fontWeight: '800' },
-  horizontalList: { gap: 10, paddingRight: 8 },
+  moreTailText: { fontSize: 13, fontWeight: '900' },
+  moreTailSubText: { fontSize: 11, fontWeight: '800' },
+  horizontalList: { alignItems: 'flex-start', gap: 10, minHeight: 250, paddingRight: 8 },
   emptyBox: { alignItems: 'center', borderRadius: 8, borderWidth: 1, gap: 6, padding: 18 },
 });

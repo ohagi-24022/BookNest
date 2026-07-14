@@ -1,22 +1,41 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { StyleSheet, Text, View } from 'react-native';
+import { GestureResponderEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { RankingDisplayRow } from '../lib/rankings';
 import { useAppTheme } from '../store/ThemeContext';
 import { BookCover } from './BookCover';
 
 type RankingCardProps = {
+  added?: boolean;
+  expanded?: boolean;
   index: number;
+  onAddWishlist?: () => void;
+  onPress?: () => void;
   row: RankingDisplayRow;
   variant?: 'compact' | 'wide';
 };
 
-export function RankingCard({ index, row, variant = 'wide' }: RankingCardProps) {
+export function RankingCard({
+  added = false,
+  expanded = false,
+  index,
+  onAddWishlist,
+  onPress,
+  row,
+  variant = 'wide',
+}: RankingCardProps) {
   const { colors } = useAppTheme();
   const compact = variant === 'compact';
+  const Container = onPress ? Pressable : View;
+  const handleAddWishlist = (event: GestureResponderEvent) => {
+    event.stopPropagation();
+    onAddWishlist?.();
+  };
 
   return (
-    <View
+    <Container
+      accessibilityRole={onPress ? 'button' : undefined}
+      onPress={onPress}
       style={[
         compact ? styles.compactCard : styles.wideCard,
         { backgroundColor: colors.surface, borderColor: colors.border },
@@ -56,7 +75,39 @@ export function RankingCard({ index, row, variant = 'wide' }: RankingCardProps) 
           </Text>
         ) : null}
       </View>
-    </View>
+      {compact && expanded && onAddWishlist ? (
+        <Pressable
+          accessibilityLabel={`${row.title}を欲しいに追加`}
+          disabled={added}
+          onPress={handleAddWishlist}
+          style={[
+            styles.compactAddButton,
+            { backgroundColor: added ? colors.elevated : colors.text, borderColor: colors.border },
+          ]}
+        >
+          <Ionicons color={added ? colors.muted : colors.background} name={added ? 'checkmark' : 'add'} size={15} />
+          <Text style={[styles.compactAddText, { color: added ? colors.muted : colors.background }]}>
+            {added ? '追加済み' : '欲しいに追加'}
+          </Text>
+        </Pressable>
+      ) : null}
+      {!compact && onAddWishlist ? (
+        <Pressable
+          accessibilityLabel={`${row.title}を欲しいに追加`}
+          disabled={added}
+          onPress={handleAddWishlist}
+          style={[
+            styles.wideAddButton,
+            { backgroundColor: added ? colors.elevated : colors.text, borderColor: colors.border },
+          ]}
+        >
+          <Ionicons color={added ? colors.muted : colors.background} name={added ? 'checkmark' : 'add'} size={16} />
+          <Text style={[styles.wideAddText, { color: added ? colors.muted : colors.background }]}>
+            {added ? '追加済み' : '欲しいに追加'}
+          </Text>
+        </Pressable>
+      ) : null}
+    </Container>
   );
 }
 
@@ -86,7 +137,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     gap: 8,
-    minHeight: 190,
+    minHeight: 196,
     padding: 10,
     width: 136,
   },
@@ -99,11 +150,11 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   rank: { fontSize: 14, fontWeight: '900' },
-  compactCover: { borderRadius: 6, height: 124, width: 84 },
+  compactCover: { borderRadius: 6, height: 112, width: 76 },
   wideCover: { borderRadius: 6, height: 84, width: 56 },
   body: { flex: 1, gap: 7 },
   compactBody: { alignSelf: 'stretch', flex: 0 },
-  title: { fontSize: 15, fontWeight: '900', lineHeight: 20 },
+  title: { fontSize: 15, fontWeight: '900', lineHeight: 20, minHeight: 40 },
   compactScore: { fontSize: 12, fontWeight: '800', lineHeight: 16 },
   wideMetrics: { flexDirection: 'row', gap: 6 },
   metric: {
@@ -118,4 +169,25 @@ const styles = StyleSheet.create({
   metricValue: { fontSize: 12, fontWeight: '900' },
   metricLabel: { fontSize: 10, fontWeight: '700' },
   subText: { fontSize: 12, lineHeight: 16 },
+  compactAddButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 4,
+    height: 34,
+    justifyContent: 'center',
+    width: '100%',
+  },
+  compactAddText: { fontSize: 12, fontWeight: '900' },
+  wideAddButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 5,
+    height: 38,
+    paddingHorizontal: 12,
+  },
+  wideAddText: { fontSize: 13, fontWeight: '900' },
 });
