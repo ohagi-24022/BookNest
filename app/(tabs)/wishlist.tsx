@@ -11,7 +11,9 @@ import {
   View,
 } from 'react-native';
 
+import { BookCover } from '../../src/components/BookCover';
 import { buildPurchaseUrl } from '../../src/lib/bookApis';
+import { useLibrary } from '../../src/store/LibraryContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 import { useWishlist, WishlistItem } from '../../src/store/WishlistContext';
 
@@ -27,8 +29,18 @@ function priorityLabel(score: number) {
   return 'いつか欲しい';
 }
 
+function normalizeTitleForCover(value?: string) {
+  return value
+    ?.normalize('NFKC')
+    .toLowerCase()
+    .replace(/[「」『』【】［］\[\]（）()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export default function WishlistScreen() {
   const { colors } = useAppTheme();
+  const { books } = useLibrary();
   const { addItem, deleteItem, items, updateItem } = useWishlist();
   const [title, setTitle] = useState('');
   const [note, setNote] = useState('');
@@ -41,6 +53,42 @@ export default function WishlistScreen() {
 
   const trimmedTitle = title.trim();
   const topItems = useMemo(() => items.slice(0, 3), [items]);
+  const coverByTitle = useMemo(() => {
+    const map = new Map<string, { coverUrl: string; rank: number }>();
+    const sortedBooks = [...books].sort((left, right) => {
+      const leftVolume = left.volumeNumber ?? Number.MAX_SAFE_INTEGER;
+      const rightVolume = right.volumeNumber ?? Number.MAX_SAFE_INTEGER;
+      return (
+        leftVolume - rightVolume ||
+        left.createdAt.localeCompare(right.createdAt) ||
+        left.title.localeCompare(right.title)
+      );
+    });
+
+    for (const book of sortedBooks) {
+      if (!book.thumbnailUrl) continue;
+      const rank = book.volumeNumber === 1 ? 0 : book.volumeNumber ?? Number.MAX_SAFE_INTEGER;
+      for (const key of [book.title, book.seriesTitle]) {
+        const normalizedKey = normalizeTitleForCover(key);
+        if (!normalizedKey) continue;
+        const current = map.get(normalizedKey);
+        if (!current || rank < current.rank) {
+          map.set(normalizedKey, { coverUrl: book.thumbnailUrl, rank });
+        }
+      }
+    }
+    return map;
+  }, [books]);
+
+  const findCoverUrl = (value: string) => {
+    const normalizedTitle = normalizeTitleForCover(value);
+    if (!normalizedTitle) return undefined;
+    const exactCover = coverByTitle.get(normalizedTitle)?.coverUrl;
+    if (exactCover) return exactCover;
+    return [...coverByTitle.entries()]
+      .filter(([key]) => key.includes(normalizedTitle) || normalizedTitle.includes(key))
+      .sort((left, right) => left[1].rank - right[1].rank)?.[0]?.[1].coverUrl;
+  };
 
   const submit = () => {
     if (!trimmedTitle) {
@@ -50,6 +98,7 @@ export default function WishlistScreen() {
     addItem({
       title: trimmedTitle,
       score: selectedPriority.score,
+      coverUrl: findCoverUrl(trimmedTitle),
       note,
       purchaseUrl: buildPurchaseUrl(trimmedTitle),
     });
@@ -85,6 +134,7 @@ export default function WishlistScreen() {
     addItem({
       title: lastDeleted.title,
       score: lastDeleted.score,
+      coverUrl: lastDeleted.coverUrl,
       note: lastDeleted.note,
       purchaseUrl: lastDeleted.purchaseUrl,
     });
@@ -202,6 +252,11 @@ export default function WishlistScreen() {
             <View key={item.id} style={[styles.card, { borderColor: colors.border }]}>
               <View style={styles.cardHeader}>
                 <Text style={[styles.rankText, { color: colors.text }]}>#{index + 1}</Text>
+                <BookCover
+                  thumbnailUrl={findCoverUrl(item.title) ?? item.coverUrl}
+                  style={styles.cover}
+                  placeholderText="No Cover"
+                />
                 <View style={styles.cardBody}>
                   <Text style={[styles.cardTitle, { color: colors.text }]}>{item.title}</Text>
                   <View style={styles.metaRow}>
@@ -342,6 +397,7 @@ const styles = StyleSheet.create({
   card: { borderRadius: 8, borderWidth: 1, gap: 10, padding: 12 },
   cardHeader: { alignItems: 'flex-start', flexDirection: 'row', gap: 12 },
   rankText: { fontSize: 14, fontWeight: '900', minWidth: 34, paddingTop: 2 },
+  cover: { borderRadius: 6, height: 84, width: 58 },
   cardBody: { flex: 1, gap: 5 },
   cardTitle: { fontSize: 16, fontWeight: '900' },
   metaRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
@@ -370,7 +426,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 12,
   },
-  editBox: { gap: 8, marginLeft: 46 },
+  editBox: { gap: 8, marginLeft: 104 },
   editInput: { borderRadius: 8, fontSize: 15, height: 42, paddingHorizontal: 12 },
   editNoteInput: {
     borderRadius: 8,
@@ -381,7 +437,7 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   editActions: { flexDirection: 'row', gap: 8, justifyContent: 'flex-end' },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginLeft: 46 },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginLeft: 104 },
   smallButton: {
     alignItems: 'center',
     borderRadius: 8,

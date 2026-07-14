@@ -128,6 +128,7 @@ export default function SeriesScreen() {
     addWishlistItem({
       title: item.volumeNumber ? `${item.seriesTitle} ${item.volumeNumber}巻` : item.title,
       score: 75,
+      coverUrl: item.thumbnailUrl,
       note: '巻抜けから追加',
       purchaseUrl: buildPurchaseUrl(item.seriesTitle, item.volumeNumber),
     });

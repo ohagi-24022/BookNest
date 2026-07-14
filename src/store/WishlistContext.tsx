@@ -18,6 +18,7 @@ export type WishlistItem = {
   id: string;
   title: string;
   score: number;
+  coverUrl?: string;
   note?: string;
   purchaseUrl?: string;
   createdAt: string;
@@ -27,6 +28,7 @@ export type WishlistItem = {
 type WishlistInput = {
   title: string;
   score: number;
+  coverUrl?: string;
   note?: string;
   purchaseUrl?: string;
 };
@@ -40,6 +42,7 @@ type WishlistContextValue = {
 
 type WantedMangaRow = {
   created_at?: string | null;
+  cover_url?: string | null;
   id?: string | null;
   note?: string | null;
   normalized_title: string;
@@ -79,6 +82,7 @@ function toWishlistItem(row: WantedMangaRow): WishlistItem {
     id: row.id ?? `cloud-${row.normalized_title}`,
     title: row.title,
     score: clampScore(row.score),
+    coverUrl: row.cover_url ?? undefined,
     note: row.note ?? undefined,
     purchaseUrl: row.purchase_url ?? undefined,
     createdAt: row.created_at ?? row.updated_at ?? now,
@@ -123,6 +127,7 @@ export function WishlistProvider({ children }: PropsWithChildren) {
       const { error } = await supabase.from('wanted_manga').upsert(
         {
           note: item.note ?? null,
+          cover_url: item.coverUrl ?? null,
           normalized_title: normalizedTitle,
           purchase_url: item.purchaseUrl ?? null,
           score: item.score,
@@ -167,7 +172,7 @@ export function WishlistProvider({ children }: PropsWithChildren) {
       if (supabase && user) {
         const { data, error } = await supabase
           .from('wanted_manga')
-          .select('id,title,normalized_title,score,note,purchase_url,created_at,updated_at')
+          .select('id,title,normalized_title,score,cover_url,note,purchase_url,created_at,updated_at')
           .eq('user_id', user.id);
         if (!error) {
           nextItems = mergeItems(nextItems, (data ?? []).map(toWishlistItem));
@@ -204,6 +209,7 @@ export function WishlistProvider({ children }: PropsWithChildren) {
           const nextItem: WishlistItem = existing
             ? {
                 ...existing,
+                coverUrl: input.coverUrl?.trim() || existing.coverUrl,
                 note: input.note?.trim() || existing.note,
                 purchaseUrl: input.purchaseUrl?.trim() || existing.purchaseUrl,
                 score: clampScore(input.score),
@@ -214,6 +220,7 @@ export function WishlistProvider({ children }: PropsWithChildren) {
                 id: createId(),
                 title,
                 score: clampScore(input.score),
+                coverUrl: input.coverUrl?.trim() || undefined,
                 note: input.note?.trim() || undefined,
                 purchaseUrl: input.purchaseUrl?.trim() || undefined,
                 createdAt: now,
@@ -241,6 +248,7 @@ export function WishlistProvider({ children }: PropsWithChildren) {
               ...item,
               ...(input.title !== undefined ? { title: input.title.trim() || item.title } : {}),
               ...(input.score !== undefined ? { score: clampScore(input.score) } : {}),
+              ...(input.coverUrl !== undefined ? { coverUrl: input.coverUrl.trim() || undefined } : {}),
               ...(input.note !== undefined ? { note: input.note.trim() || undefined } : {}),
               ...(input.purchaseUrl !== undefined
                 ? { purchaseUrl: input.purchaseUrl.trim() || undefined }
