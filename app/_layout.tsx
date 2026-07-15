@@ -13,15 +13,15 @@ import { WishlistProvider } from '../src/store/WishlistContext';
 export default function RootLayout() {
   return (
     <ThemeProvider>
-      <AppSettingsProvider>
-        <AuthProvider>
+      <AuthProvider>
+        <AppSettingsProvider>
           <WishlistProvider>
             <LibraryProvider>
               <RootStack />
             </LibraryProvider>
           </WishlistProvider>
-        </AuthProvider>
-      </AppSettingsProvider>
+        </AppSettingsProvider>
+      </AuthProvider>
     </ThemeProvider>
   );
 }

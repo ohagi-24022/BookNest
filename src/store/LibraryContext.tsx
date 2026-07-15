@@ -286,6 +286,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
 
     setLoading(true);
     setError(null);
+    const userId = user.id;
 
     async function loadBooks(client: SupabaseClient) {
       try {
@@ -299,7 +300,47 @@ export function LibraryProvider({ children }: PropsWithChildren) {
         if (fetchError) {
           throw new Error(formatSupabaseError(fetchError, 'Failed to load books.'));
         }
-        setBooks(((data ?? []) as BookRow[]).map(fromBookRow));
+        const cloudBooks = ((data ?? []) as BookRow[]).map(fromBookRow);
+        const comparisonBooks = [...cloudBooks];
+        const booksToImport: Book[] = [];
+
+        for (const localBook of pendingLocalBooks) {
+          const input = normalizeBookInput({
+            isbn: localBook.isbn,
+            title: localBook.title,
+            seriesTitle: localBook.seriesTitle,
+            volumeNumber: localBook.volumeNumber,
+            author: localBook.author,
+            publisher: localBook.publisher,
+            thumbnailUrl: localBook.thumbnailUrl,
+            status: localBook.status,
+          });
+          if (findDuplicate(comparisonBooks, input)) continue;
+
+          const importedBook: Book = {
+            ...input,
+            id: createUuid(),
+            userId,
+            createdAt: localBook.createdAt || now(),
+          };
+          booksToImport.push(importedBook);
+          comparisonBooks.push(importedBook);
+        }
+
+        if (booksToImport.length > 0) {
+          const { error: insertError } = await client
+            .from('books')
+            .insert(booksToImport.map((book) => toBookInsert(book, userId, book.id)));
+          if (insertError) {
+            throw new Error(formatSupabaseError(insertError, 'ローカル蔵書を自動移行できませんでした。'));
+          }
+        }
+
+        if (pendingLocalBooks.length > 0) {
+          await AsyncStorage.removeItem(STORAGE_KEY);
+          setPendingLocalBooks([]);
+        }
+        setBooks([...booksToImport, ...cloudBooks]);
       } catch (fetchError) {
         setError(fetchError instanceof Error ? fetchError.message : 'Failed to load books.');
       } finally {

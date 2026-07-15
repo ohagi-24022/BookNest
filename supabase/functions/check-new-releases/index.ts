@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 type FunctionMode = 'all' | 'check' | 'deliver';
@@ -17,6 +17,8 @@ type PushTokenRow = {
 };
 
 type NotificationLogRow = {
+  attempt_count: number | null;
+  id: string;
   user_id: string;
 };
 
@@ -264,22 +266,30 @@ async function getRecentPublicationCheck(seriesKey: string): Promise<Publication
 }
 
 async function deliverDailyNotifications(userLimit: number) {
-  const todayStart = new Date();
-  todayStart.setUTCHours(0, 0, 0, 0);
-
   const { data: logs, error } = await supabase
     .from('notification_logs')
-    .select('user_id')
+    .select('id,user_id,attempt_count')
     .eq('status', 'pending')
-    .gte('created_at', todayStart.toISOString())
+    .lte('next_retry_at', new Date().toISOString())
     .order('created_at', { ascending: true })
     .limit(userLimit * 20);
   if (error) throw error;
 
-  const userIds = [...new Set(((logs ?? []) as NotificationLogRow[]).map((log) => log.user_id))].slice(0, userLimit);
+  const logsByUser = new Map<string, NotificationLogRow[]>();
+  for (const log of (logs ?? []) as NotificationLogRow[]) {
+    const rows = logsByUser.get(log.user_id) ?? [];
+    rows.push(log);
+    logsByUser.set(log.user_id, rows);
+  }
+
+  const userIds = [...logsByUser.keys()].slice(0, userLimit);
   const delivered: Array<{ sent: number; status: string; userId: string; error?: string }> = [];
 
   for (const userId of userIds) {
+    const targetLogs = logsByUser.get(userId) ?? [];
+    const targetLogIds = targetLogs.map((log) => log.id);
+    if (targetLogIds.length === 0) continue;
+
     try {
       const { data: tokens, error: tokenError } = await supabase
         .from('push_tokens')
@@ -290,6 +300,7 @@ async function deliverDailyNotifications(userLimit: number) {
 
       let sent = 0;
       let lastResponse: unknown = null;
+      let lastError: string | null = null;
       for (const token of (tokens ?? []) as PushTokenRow[]) {
         const response = await sendExpoPush({
           body: 'BookNestで新刊情報を確認できます。',
@@ -301,34 +312,65 @@ async function deliverDailyNotifications(userLimit: number) {
           to: token.expo_push_token,
         });
         lastResponse = response;
-        if (response.ok) sent += 1;
+        if (response.ok) {
+          sent += 1;
+        } else {
+          lastError = `Expo Push HTTP ${response.status}`;
+        }
       }
 
-      const status = sent > 0 ? 'sent' : 'error';
+      const attemptCount = nextAttemptCount(targetLogs);
+      const willRetry = sent === 0 && attemptCount < 5;
+      const status = sent > 0 ? 'sent' : willRetry ? 'pending' : 'failed';
       const { error: updateError } = await supabase
         .from('notification_logs')
         .update({
+          attempt_count: sent > 0 ? 0 : attemptCount,
+          delivered_at: sent > 0 ? new Date().toISOString() : null,
+          failed_at: status === 'failed' ? new Date().toISOString() : null,
+          last_error: sent > 0 ? null : lastError ?? 'No enabled push token was available.',
+          next_retry_at: sent > 0 ? new Date().toISOString() : nextRetryAt(attemptCount),
           notification_title: 'BookNest 新刊情報',
           response: lastResponse,
           status,
         })
-        .eq('user_id', userId)
-        .eq('status', 'pending')
-        .gte('created_at', todayStart.toISOString());
+        .in('id', targetLogIds);
       if (updateError) throw updateError;
 
       delivered.push({ sent, status, userId });
     } catch (deliveryError) {
+      const attemptCount = nextAttemptCount(targetLogs);
+      const willRetry = attemptCount < 5;
+      await supabase
+        .from('notification_logs')
+        .update({
+          attempt_count: attemptCount,
+          failed_at: willRetry ? null : new Date().toISOString(),
+          last_error: describeError(deliveryError),
+          next_retry_at: nextRetryAt(attemptCount),
+          status: willRetry ? 'pending' : 'failed',
+        })
+        .in('id', targetLogIds);
+
       delivered.push({
         error: describeError(deliveryError),
         sent: 0,
-        status: 'error',
+        status: willRetry ? 'retry' : 'failed',
         userId,
       });
     }
   }
 
   return delivered;
+}
+
+function nextAttemptCount(logs: NotificationLogRow[]) {
+  return Math.max(0, ...logs.map((log) => log.attempt_count ?? 0)) + 1;
+}
+
+function nextRetryAt(attemptCount: number) {
+  const retryMinutes = Math.min(60 * 24, 5 * 2 ** Math.max(0, attemptCount - 1));
+  return new Date(Date.now() + retryMinutes * 60 * 1000).toISOString();
 }
 
 async function pruneOldNotificationLogs() {
@@ -471,7 +513,7 @@ function parseVolumeNumber(title: string) {
   const patterns = [
     /(?:第\s*)?([0-9]{1,3})\s*巻/,
     /(?:^|[\s:・\-ー])([0-9]{1,3})(?=$|[\s()（）「」『』])/,
-    /[（(「『]\s*(?:第\s*)?([0-9]{1,3})\s*(?:巻)?/,
+    /[（(]\s*(?:第\s*)?([0-9]{1,3})\s*(?:巻)?/,
   ];
   for (const pattern of patterns) {
     const match = normalized.match(pattern);

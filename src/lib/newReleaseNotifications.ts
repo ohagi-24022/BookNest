@@ -170,7 +170,7 @@ export async function enableNewReleaseNotifications(
       platform: Platform.OS,
       user_id: userId,
     },
-    { onConflict: 'expo_push_token' },
+    { onConflict: 'user_id,expo_push_token' },
   );
   if (tokenError) {
     throw new Error(

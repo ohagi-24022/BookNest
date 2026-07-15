@@ -10,6 +10,7 @@ import {
 } from 'react';
 
 import { supabase } from '../lib/supabase';
+import { disableNewReleaseNotifications } from '../lib/newReleaseNotifications';
 
 type AuthContextValue = {
   configured: boolean;
@@ -81,9 +82,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   const signOut = useCallback(async () => {
     if (!supabase) return;
+    const userId = session?.user.id;
+    if (userId) {
+      await disableNewReleaseNotifications(userId);
+    }
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
-  }, []);
+  }, [session?.user.id]);
 
   const value = useMemo(
     () => ({

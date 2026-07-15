@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 
@@ -118,6 +119,7 @@ export function WishlistProvider({ children }: PropsWithChildren) {
   const storageKey = getStorageKey(user?.id);
   const [items, setItems] = useState<WishlistItem[]>([]);
   const [hydrated, setHydrated] = useState(false);
+  const hydratedStorageKeyRef = useRef<string | null>(null);
 
   const persistCloudItem = useCallback(
     async (item: WishlistItem) => {
@@ -165,7 +167,9 @@ export function WishlistProvider({ children }: PropsWithChildren) {
     let cancelled = false;
 
     const hydrate = async () => {
+      hydratedStorageKeyRef.current = null;
       setHydrated(false);
+      setItems([]);
       const storedItems = await AsyncStorage.getItem(storageKey);
       let nextItems = parseStoredItems(storedItems);
 
@@ -180,6 +184,7 @@ export function WishlistProvider({ children }: PropsWithChildren) {
       }
 
       if (cancelled) return;
+      hydratedStorageKeyRef.current = storageKey;
       setItems(nextItems);
       setHydrated(true);
       await AsyncStorage.setItem(storageKey, JSON.stringify(nextItems));
@@ -192,7 +197,7 @@ export function WishlistProvider({ children }: PropsWithChildren) {
   }, [storageKey, user]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || hydratedStorageKeyRef.current !== storageKey) return;
     AsyncStorage.setItem(storageKey, JSON.stringify(items));
   }, [hydrated, items, storageKey]);
 
@@ -255,6 +260,9 @@ export function WishlistProvider({ children }: PropsWithChildren) {
                 : {}),
               updatedAt: new Date().toISOString(),
             };
+            if (normalizeWantedTitle(nextItem.title) !== normalizeWantedTitle(item.title)) {
+              void deleteCloudItem(item);
+            }
             void persistCloudItem(nextItem);
             return nextItem;
           }),
