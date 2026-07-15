@@ -36,10 +36,7 @@ export function buildSeriesGroups(books: Book[]): SeriesGroup[] {
             (right.volumeNumber ?? Number.MAX_SAFE_INTEGER) ||
           left.createdAt.localeCompare(right.createdAt),
       );
-      const representative =
-        earliestSortedBooks.find((book) => !!book.thumbnailUrl) ??
-        earliestSortedBooks[0] ??
-        latestSortedBooks[0];
+      const representative = earliestSortedBooks[0] ?? latestSortedBooks[0];
       const title = representative.seriesTitle;
 
       return {

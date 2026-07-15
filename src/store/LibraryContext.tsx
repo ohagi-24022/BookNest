@@ -597,12 +597,13 @@ export function LibraryProvider({ children }: PropsWithChildren) {
 
   const deleteBook = useCallback(async (bookId: string) => {
     const book = books.find((candidate) => candidate.id === bookId);
+    const deleteByIsbn = !!book?.isbn && !isUuid(bookId);
 
     if (configured) {
       if (supabase && user) {
         const query = supabase.from('books').delete().eq('user_id', user.id);
         const { error: deleteError } =
-          isUuid(bookId) || !book?.isbn ? await query.eq('id', bookId) : await query.eq('isbn', book.isbn);
+          deleteByIsbn ? await query.eq('isbn', book.isbn) : await query.eq('id', bookId);
 
         if (deleteError) {
           throw new Error(formatSupabaseError(deleteError, 'Supabaseの削除に失敗しました。'));
@@ -610,9 +611,17 @@ export function LibraryProvider({ children }: PropsWithChildren) {
       }
     }
 
-    setBooks((currentBooks) => currentBooks.filter((book) => book.id !== bookId));
+    setBooks((currentBooks) =>
+      currentBooks.filter((currentBook) =>
+        deleteByIsbn ? currentBook.isbn !== book?.isbn : currentBook.id !== bookId,
+      ),
+    );
     if (configured && !user) {
-      setPendingLocalBooks((currentBooks) => currentBooks.filter((book) => book.id !== bookId));
+      setPendingLocalBooks((currentBooks) =>
+        currentBooks.filter((currentBook) =>
+          deleteByIsbn ? currentBook.isbn !== book?.isbn : currentBook.id !== bookId,
+        ),
+      );
     }
   }, [books, configured, user]);
 

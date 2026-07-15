@@ -47,7 +47,7 @@ export default function SeriesScreen() {
   const { addBook, getSeriesItems, bulkUpdateStatus, updateBook, renameSeries, deleteBook, repairBookMetadata } =
     useLibrary();
   const { addItem: addWishlistItem } = useWishlist();
-  const { isFavoriteSeries, migrateFavoriteSeries, openExternalPurchaseLinks, showPublishedLatestVolume, toggleFavoriteSeries } =
+  const { isFavoriteSeries, migrateFavoriteSeries, openExternalPurchaseLinks, setFavoriteSeries, showPublishedLatestVolume } =
     useAppSettings();
   const { colors } = useAppTheme();
   const listRef = useRef<FlatList<ShelfItem>>(null);
@@ -121,7 +121,7 @@ export default function SeriesScreen() {
         <Pressable
           accessibilityLabel={favorite ? 'お気に入りを解除' : 'お気に入りに追加'}
           hitSlop={10}
-          onPress={() => toggleFavoriteSeries(seriesTitle)}
+          onPress={() => setFavoriteSeries(seriesTitle, !favorite)}
           style={styles.headerFavoriteButton}
         >
           <Ionicons
@@ -132,7 +132,7 @@ export default function SeriesScreen() {
         </Pressable>
       ),
     });
-  }, [colors.muted, colors.primary, favorite, navigation, seriesTitle, toggleFavoriteSeries]);
+  }, [colors.muted, colors.primary, favorite, navigation, seriesTitle, setFavoriteSeries]);
 
   useEffect(() => {
     setPage(1);

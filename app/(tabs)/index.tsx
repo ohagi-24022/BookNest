@@ -25,6 +25,7 @@ import {
 import { getMissingVolumes, normalizeSeriesKey } from '../../src/lib/series';
 import { SeriesGroup } from '../../src/lib/seriesSelectors';
 import { supabase } from '../../src/lib/supabase';
+import { isMissingSupabaseRelationError } from '../../src/lib/supabaseErrors';
 import { useAppSettings } from '../../src/store/AppSettingsContext';
 import { useAuth } from '../../src/store/AuthContext';
 import { useLibrary } from '../../src/store/LibraryContext';
@@ -139,12 +140,24 @@ function normalizeText(value: string) {
   return value.normalize('NFKC').toLowerCase();
 }
 
+function findRepresentativeRefreshTarget(books: Book[], seriesTitle: string) {
+  const targetSeriesKey = normalizeSeriesKey(seriesTitle);
+  return books
+    .filter((book) => normalizeSeriesKey(book.seriesTitle) === targetSeriesKey)
+    .sort(
+      (left, right) =>
+        (left.volumeNumber ?? Number.MAX_SAFE_INTEGER) -
+          (right.volumeNumber ?? Number.MAX_SAFE_INTEGER) ||
+        left.createdAt.localeCompare(right.createdAt),
+    )[0];
+}
+
 export default function HomeScreen() {
   const { colors } = useAppTheme();
-  const { favoriteSeriesKeys, newReleaseNotifications, showPublishedLatestVolume, toggleFavoriteSeries } =
+  const { favoriteSeriesKeys, hydrated: appSettingsHydrated, newReleaseNotifications, setFavoriteSeries, showPublishedLatestVolume } =
     useAppSettings();
   const { user } = useAuth();
-  const { books, error, loading, requiresAuth, seriesGroups } = useLibrary();
+  const { books, error, loading, repairBookMetadata, requiresAuth, seriesGroups } = useLibrary();
   const [filters, setFilters] = useState<HomeFilter[]>(['all']);
   const [viewMode, setViewMode] = useState<'series' | 'books'>('series');
   const [seriesSort, setSeriesSort] = useState<SeriesSort>('title');
@@ -153,6 +166,7 @@ export default function HomeScreen() {
   const [openMenu, setOpenMenu] = useState<'filter' | 'sort' | 'author' | 'publisher' | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(152);
   const [publicationCache, setPublicationCache] = useState<SeriesPublicationCache>({});
+  const [visibleFavoriteSeriesKeys, setVisibleFavoriteSeriesKeys] = useState<string[]>(favoriteSeriesKeys);
   const [refreshingSeriesTitle, setRefreshingSeriesTitle] = useState<string | null>(null);
   const [notificationSeriesKeys, setNotificationSeriesKeys] = useState<string[]>([]);
   const [updatingNotificationSeriesKey, setUpdatingNotificationSeriesKey] = useState<string | null>(null);
@@ -165,8 +179,50 @@ export default function HomeScreen() {
   const lastScrollYRef = useRef(0);
   const directionDistanceRef = useRef(0);
   const lastDirectionRef = useRef<1 | -1>(1);
-  const favoriteSeriesKeySet = useMemo(() => new Set(favoriteSeriesKeys), [favoriteSeriesKeys]);
+  const favoriteSeriesKeySet = useMemo(() => new Set(visibleFavoriteSeriesKeys), [visibleFavoriteSeriesKeys]);
   activeViewModeRef.current = viewMode;
+
+  useEffect(() => {
+    setVisibleFavoriteSeriesKeys(favoriteSeriesKeys);
+  }, [favoriteSeriesKeys]);
+
+  useEffect(() => {
+    if (!appSettingsHydrated || !user || !supabase || seriesGroups.length === 0) return;
+    let cancelled = false;
+    const groupKeys = new Map(
+      seriesGroups.map((group) => [normalizeSeriesKey(group.title), normalizeSeriesKey(group.title)]),
+    );
+
+    supabase
+      .from('favorite_series')
+      .select('series_key, series_title')
+      .eq('user_id', user.id)
+      .then(({ data, error: favoriteLoadError }) => {
+        if (cancelled) return;
+        if (favoriteLoadError) {
+          if (!isMissingSupabaseRelationError(favoriteLoadError)) {
+            console.warn('Failed to refresh favorite series state', favoriteLoadError);
+          }
+          return;
+        }
+
+        const remoteKeys = (data ?? []).flatMap((row) => {
+          const seriesKey = typeof row.series_key === 'string' ? normalizeSeriesKey(row.series_key) : '';
+          const seriesTitle = typeof row.series_title === 'string' ? normalizeSeriesKey(row.series_title) : '';
+          return [seriesKey, seriesTitle].filter(Boolean);
+        });
+        const matchedKeys = remoteKeys
+          .map((key) => groupKeys.get(key))
+          .filter((key): key is string => !!key);
+
+        if (matchedKeys.length === 0) return;
+        setVisibleFavoriteSeriesKeys((current) => [...new Set([...current, ...matchedKeys])]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [appSettingsHydrated, seriesGroups, user]);
 
   useEffect(() => {
     AsyncStorage.getItem(SERIES_PUBLICATION_STORAGE_KEY)
@@ -205,7 +261,7 @@ export default function HomeScreen() {
   }, [newReleaseNotifications, seriesGroups, user]);
 
   useEffect(() => {
-    if (!user || !supabase) return;
+    if (!appSettingsHydrated || !user || !supabase) return;
     const client = supabase;
 
     const favoriteKeySet = new Set(favoriteSeriesKeys);
@@ -221,36 +277,18 @@ export default function HomeScreen() {
       }));
 
     const syncFavoriteSeries = async () => {
-      const { data: existingRows, error: fetchError } = await client
-        .from('favorite_series')
-        .select('series_key')
-        .eq('user_id', user.id);
-      if (fetchError) throw fetchError;
-
       if (favoriteRows.length > 0) {
         const { error: upsertError } = await client
           .from('favorite_series')
           .upsert(favoriteRows, { onConflict: 'user_id,series_key' });
         if (upsertError) throw upsertError;
       }
-
-      const staleKeys = (existingRows ?? [])
-        .map((row) => row.series_key as string)
-        .filter((seriesKey) => !favoriteKeySet.has(seriesKey));
-      if (staleKeys.length > 0) {
-        const { error: deleteError } = await client
-          .from('favorite_series')
-          .delete()
-          .eq('user_id', user.id)
-          .in('series_key', staleKeys);
-        if (deleteError) throw deleteError;
-      }
     };
 
     syncFavoriteSeries().catch((favoriteSyncError) => {
       console.warn('Failed to sync favorite series rankings', favoriteSyncError);
     });
-  }, [favoriteSeriesKeys, seriesGroups, user]);
+  }, [appSettingsHydrated, favoriteSeriesKeys, seriesGroups, user]);
 
   const metadataFilterOptions = useMemo(() => {
     const authors = [...new Set(seriesGroups.flatMap((group) => group.authors))]
@@ -492,8 +530,16 @@ export default function HomeScreen() {
   const refreshSeriesPublication = async (seriesTitle: string, ownedLatestVolume?: number) => {
     if (refreshingSeriesTitle) return;
     setRefreshingSeriesTitle(seriesTitle);
+    const representativeTarget = findRepresentativeRefreshTarget(books, seriesTitle);
+    const refreshRepresentativeCover = representativeTarget
+      ? repairBookMetadata(representativeTarget.id).catch((metadataError) => {
+          console.warn('Failed to refresh representative cover', metadataError);
+        })
+      : Promise.resolve();
+
     try {
       const result = await lookupLatestSeriesPublication(seriesTitle);
+      await refreshRepresentativeCover;
       if (!result) {
         Alert.alert('刊行巻数を取得できませんでした', '同じシリーズの巻数情報が見つかりませんでした。');
         return;
@@ -506,12 +552,54 @@ export default function HomeScreen() {
         return next;
       });
     } catch (refreshError) {
+      await refreshRepresentativeCover;
       Alert.alert(
         '更新できませんでした',
         refreshError instanceof Error ? refreshError.message : '通信状態を確認して、もう一度お試しください。',
       );
     } finally {
       setRefreshingSeriesTitle(null);
+    }
+  };
+
+  const toggleSeriesFavorite = async (group: SeriesGroup) => {
+    const seriesKey = normalizeSeriesKey(group.title);
+    const nextFavorite = !favoriteSeriesKeySet.has(seriesKey);
+    setVisibleFavoriteSeriesKeys((current) => {
+      const withoutCurrent = current.filter((key) => key !== seriesKey);
+      return nextFavorite ? [...withoutCurrent, seriesKey] : withoutCurrent;
+    });
+    setFavoriteSeries(group.title, nextFavorite);
+
+    if (!user || !supabase) return;
+
+    try {
+      if (nextFavorite) {
+        const { error: upsertError } = await supabase.from('favorite_series').upsert(
+          {
+            user_id: user.id,
+            series_key: seriesKey,
+            series_title: group.title,
+            cover_url: group.representative.thumbnailUrl ?? null,
+            owned_volume_count: group.ownedCount,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id,series_key' },
+        );
+        if (upsertError) throw upsertError;
+      } else {
+        const { error: deleteError } = await supabase
+          .from('favorite_series')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('series_key', seriesKey);
+        if (deleteError) throw deleteError;
+      }
+    } catch (favoriteError) {
+      console.warn(
+        'Favorite was saved locally, but failed to sync to Supabase.',
+        isMissingSupabaseRelationError(favoriteError) ? 'favorite_series is not available yet.' : favoriteError,
+      );
     }
   };
 
@@ -579,7 +667,7 @@ export default function HomeScreen() {
           ref={seriesListRef}
           style={styles.list}
           data={visibleGroups}
-          extraData={`${listVersion}-${favoriteSeriesKeys.join(',')}-${refreshingSeriesTitle}-${showPublishedLatestVolume}-${notificationSeriesKeys.join(',')}-${updatingNotificationSeriesKey}`}
+          extraData={`${listVersion}-${visibleFavoriteSeriesKeys.join(',')}-${refreshingSeriesTitle}-${showPublishedLatestVolume}-${notificationSeriesKeys.join(',')}-${updatingNotificationSeriesKey}`}
           keyExtractor={(item) => item.id}
           contentContainerStyle={[styles.grid, { paddingTop: listTopPadding }]}
           showsVerticalScrollIndicator={false}
@@ -604,7 +692,7 @@ export default function HomeScreen() {
                 notificationAvailable={Boolean(user && newReleaseNotifications)}
                 notificationEnabled={newReleaseNotifications && notificationSeriesKeys.includes(cacheKey)}
                 notificationUpdating={updatingNotificationSeriesKey === cacheKey}
-                onToggleFavorite={() => toggleFavoriteSeries(item.title)}
+                onToggleFavorite={() => void toggleSeriesFavorite(item)}
                 onToggleNotification={() => void toggleSeriesNotification(item)}
                 onRefresh={() => void refreshSeriesPublication(item.title, item.latestVolume)}
               />

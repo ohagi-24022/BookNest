@@ -10,6 +10,8 @@ import {
 } from 'react';
 
 import { normalizeSeriesKey } from '../lib/series';
+import { supabase } from '../lib/supabase';
+import { isMissingSupabaseRelationError } from '../lib/supabaseErrors';
 import { useAuth } from './AuthContext';
 
 const LEGACY_STORAGE_KEY = 'booknest.app-settings.v1';
@@ -29,8 +31,10 @@ type DeviceSettings = {
 type AppSettings = UserSettings & DeviceSettings;
 
 type AppSettingsContextValue = AppSettings & {
+  hydrated: boolean;
   isFavoriteSeries: (seriesTitle: string) => boolean;
   migrateFavoriteSeries: (fromSeriesTitle: string, toSeriesTitle: string) => void;
+  setFavoriteSeries: (seriesTitle: string, favorite: boolean) => void;
   setNewReleaseNotifications: (value: boolean) => void;
   setOpenExternalPurchaseLinks: (value: boolean) => void;
   setShowPublishedLatestVolume: (value: boolean) => void;
@@ -52,6 +56,14 @@ const defaultSettings: AppSettings = {
   ...defaultDeviceSettings,
 };
 
+function uniqueValues(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function normalizeFavoriteKeys(values: string[]) {
+  return uniqueValues(values.map((value) => normalizeSeriesKey(value)));
+}
+
 const AppSettingsContext = createContext<AppSettingsContextValue | null>(null);
 
 export function AppSettingsProvider({ children }: PropsWithChildren) {
@@ -72,26 +84,52 @@ export function AppSettingsProvider({ children }: PropsWithChildren) {
       AsyncStorage.getItem(userStorageKey),
       AsyncStorage.getItem(DEVICE_STORAGE_KEY),
       AsyncStorage.getItem(LEGACY_STORAGE_KEY),
+      AsyncStorage.getItem(GUEST_USER_STORAGE_KEY),
+      user && supabase
+        ? supabase
+            .from('favorite_series')
+            .select('series_key, series_title')
+            .eq('user_id', user.id)
+            .then(({ data, error }) => {
+              if (error) {
+                if (isMissingSupabaseRelationError(error)) return [];
+                console.warn('Failed to load favorite series from Supabase', error);
+                return [];
+              }
+              return (data ?? []).flatMap((row) => {
+                const seriesKey = typeof row.series_key === 'string' ? row.series_key : '';
+                const seriesTitle = typeof row.series_title === 'string' ? row.series_title : '';
+                return [seriesKey, seriesTitle].map((value) => normalizeSeriesKey(value));
+              });
+            })
+        : Promise.resolve([]),
     ])
-      .then(([storedUserSettings, storedDeviceSettings, legacySettings]) => {
+      .then(([storedUserSettings, storedDeviceSettings, legacySettings, guestUserSettings, remoteFavoriteKeys]) => {
         if (cancelled) return;
         const parsedUserSettings = storedUserSettings
           ? (JSON.parse(storedUserSettings) as Partial<UserSettings>)
           : legacySettings && !user
             ? (JSON.parse(legacySettings) as Partial<UserSettings>)
             : {};
+        const parsedGuestUserSettings = guestUserSettings
+          ? (JSON.parse(guestUserSettings) as Partial<UserSettings>)
+          : {};
         const parsedDeviceSettings = storedDeviceSettings
           ? (JSON.parse(storedDeviceSettings) as Partial<DeviceSettings>)
           : legacySettings
             ? (JSON.parse(legacySettings) as Partial<DeviceSettings>)
             : {};
+        const localFavoriteKeys = Array.isArray(parsedUserSettings.favoriteSeriesKeys)
+          ? normalizeFavoriteKeys(parsedUserSettings.favoriteSeriesKeys)
+          : [];
+        const guestFavoriteKeys = user && Array.isArray(parsedGuestUserSettings.favoriteSeriesKeys)
+          ? normalizeFavoriteKeys(parsedGuestUserSettings.favoriteSeriesKeys)
+          : [];
 
         setUserSettings({
           ...defaultUserSettings,
           ...parsedUserSettings,
-          favoriteSeriesKeys: Array.isArray(parsedUserSettings.favoriteSeriesKeys)
-            ? parsedUserSettings.favoriteSeriesKeys
-            : [],
+          favoriteSeriesKeys: normalizeFavoriteKeys([...localFavoriteKeys, ...guestFavoriteKeys, ...remoteFavoriteKeys]),
         });
         setDeviceSettings({
           ...defaultDeviceSettings,
@@ -119,6 +157,7 @@ export function AppSettingsProvider({ children }: PropsWithChildren) {
     () => ({
       ...userSettings,
       ...deviceSettings,
+      hydrated,
       isFavoriteSeries: (seriesTitle: string) =>
         userSettings.favoriteSeriesKeys.includes(normalizeSeriesKey(seriesTitle)),
       migrateFavoriteSeries: (fromSeriesTitle: string, toSeriesTitle: string) => {
@@ -138,6 +177,17 @@ export function AppSettingsProvider({ children }: PropsWithChildren) {
       },
       setNewReleaseNotifications: (newReleaseNotifications: boolean) =>
         setUserSettings((current) => ({ ...current, newReleaseNotifications })),
+      setFavoriteSeries: (seriesTitle: string, favorite: boolean) => {
+        const seriesKey = normalizeSeriesKey(seriesTitle);
+        if (!seriesKey) return;
+        setUserSettings((current) => {
+          const currentKeys = current.favoriteSeriesKeys.filter((key) => key !== seriesKey);
+          return {
+            ...current,
+            favoriteSeriesKeys: favorite ? [...currentKeys, seriesKey] : currentKeys,
+          };
+        });
+      },
       setOpenExternalPurchaseLinks: (openExternalPurchaseLinks: boolean) =>
         setDeviceSettings((current) => ({ ...current, openExternalPurchaseLinks })),
       setShowPublishedLatestVolume: (showPublishedLatestVolume: boolean) =>
@@ -152,7 +202,7 @@ export function AppSettingsProvider({ children }: PropsWithChildren) {
         }));
       },
     }),
-    [deviceSettings, userSettings],
+    [deviceSettings, hydrated, userSettings],
   );
 
   return <AppSettingsContext.Provider value={value}>{children}</AppSettingsContext.Provider>;

@@ -27,6 +27,9 @@ type GoogleBooksResponse = {
   }>;
 };
 
+type GoogleBooksItem = NonNullable<GoogleBooksResponse['items']>[number];
+type GoogleBooksVolumeInfo = GoogleBooksItem['volumeInfo'];
+
 type OpenBdResponse = Array<{
   summary?: {
     isbn?: string;
@@ -149,6 +152,26 @@ function isKnownUnavailableCoverUrl(url?: string) {
   return !!url && /imagenotavailable|no[_-]?image|noimage/i.test(url);
 }
 
+function isNonBookTitle(title?: string) {
+  if (!title) return false;
+  const normalizedTitle = title.normalize('NFKC');
+  return /blu-?ray|ブルーレイ|bd\b|dvd|cd|サウンドトラック|ost|ドラマcd/i.test(
+    normalizedTitle,
+  );
+}
+
+function isNonBookRakutenItem(item?: RakutenItem) {
+  return isNonBookTitle([item?.title, item?.subTitle, item?.itemCaption].filter(Boolean).join(' '));
+}
+
+function isNonBookGoogleVolume(volume?: GoogleBooksVolumeInfo) {
+  return isNonBookTitle([volume?.title, volume?.subtitle, volume?.description].filter(Boolean).join(' '));
+}
+
+function googleBookItems(payload: GoogleBooksResponse) {
+  return payload.items?.filter((item) => !isNonBookGoogleVolume(item.volumeInfo)) ?? [];
+}
+
 function firstCoverUrl(...urls: Array<string | undefined>) {
   return urls
     .map(normalizeImageUrl)
@@ -228,7 +251,10 @@ function rakutenItemMatchesExpected(item: RakutenItem, expected?: ExpectedBook) 
 }
 
 function selectRakutenItem(items: RakutenBooksResponse['Items'], expected?: ExpectedBook) {
-  const candidates = items?.map((entry) => entry.Item).filter((item): item is RakutenItem => !!item?.title) ?? [];
+  const candidates =
+    items
+      ?.map((entry) => entry.Item)
+      .filter((item): item is RakutenItem => !!item?.title && !isNonBookRakutenItem(item)) ?? [];
   if (candidates.length === 0) return undefined;
 
   return (
@@ -484,18 +510,26 @@ function findSeriesCompletionFromTitles(titles: Array<string | undefined>, lates
 
 function rakutenItemsToCompletionTexts(items?: RakutenBooksResponse['Items']) {
   return (
-    items?.flatMap((entry) => [
-      entry.Item?.title,
-      entry.Item?.subTitle,
-      entry.Item?.itemCaption,
-      entry.Item?.author,
-      entry.Item?.publisherName,
-    ]) ?? []
+    items
+      ?.map((entry) => entry.Item)
+      .filter((item): item is RakutenItem => !!item && !isNonBookRakutenItem(item))
+      .flatMap((item) => [
+        item.title,
+        item.subTitle,
+        item.itemCaption,
+        item.author,
+        item.publisherName,
+      ]) ?? []
   );
 }
 
 function rakutenItemsToTitleTexts(items?: RakutenBooksResponse['Items']) {
-  return items?.flatMap((entry) => [entry.Item?.title, entry.Item?.subTitle]) ?? [];
+  return (
+    items
+      ?.map((entry) => entry.Item)
+      .filter((item): item is RakutenItem => !!item && !isNonBookRakutenItem(item))
+      .flatMap((item) => [item.title, item.subTitle]) ?? []
+  );
 }
 
 async function lookupRakutenCompletionHint(seriesTitle: string, latestVolume: number | null) {
@@ -556,11 +590,11 @@ async function lookupGoogleCompletionHint(seriesTitle: string, latestVolume: num
     if (!response.ok) continue;
 
     const payload = (await response.json()) as GoogleBooksResponse;
-    const titles = payload.items?.flatMap((item) => [
+    const titles = googleBookItems(payload).flatMap((item) => [
       item.volumeInfo?.title,
       item.volumeInfo?.subtitle,
       item.volumeInfo?.description,
-    ]) ?? [];
+    ]);
     if (findSeriesCompletionFromTitles(titles, latestVolume)) return true;
   }
 
@@ -623,7 +657,7 @@ async function lookupLatestGoogleSeriesVolume(seriesTitle: string) {
   if (!response.ok) return null;
 
   const payload = (await response.json()) as GoogleBooksResponse;
-  const titles = payload.items?.map((item) => item.volumeInfo?.title) ?? [];
+  const titles = googleBookItems(payload).map((item) => item.volumeInfo?.title);
   const latestVolume = findLatestVolumeFromTitles(titles, seriesTitle);
   return latestVolume
     ? {
@@ -694,13 +728,14 @@ async function lookupGoogleBooksByQuery(
   }
 
   const payload = (await response.json()) as GoogleBooksResponse;
+  const bookItems = googleBookItems(payload);
   const normalizedIsbn = normalizeIsbn(isbn);
   const matchingItem = normalizedIsbn
-    ? payload.items?.find((item) =>
+    ? bookItems.find((item) =>
         hasMatchingIndustryIdentifier(item.volumeInfo?.industryIdentifiers, normalizedIsbn),
       )
     : undefined;
-  const matchingVolumeItem = payload.items?.find((item) => {
+  const matchingVolumeItem = bookItems.find((item) => {
     const title = item.volumeInfo?.title;
     if (!title || !options.expectedVolumeNumber || !options.expectedSeriesTitle) return false;
     const parsed = parseSeriesTitle(title);
@@ -709,7 +744,7 @@ async function lookupGoogleBooksByQuery(
       isSameSeriesTitle(parsed.seriesTitle, options.expectedSeriesTitle)
     );
   });
-  const selectedItem = matchingItem ?? matchingVolumeItem ?? payload.items?.[0];
+  const selectedItem = matchingItem ?? matchingVolumeItem ?? bookItems[0];
   const volume = selectedItem?.volumeInfo;
   if (!volume?.title) return null;
 
@@ -794,12 +829,13 @@ async function lookupGoogleBookVolumeDetails(
   if (!response.ok) return null;
 
   const payload = (await response.json()) as GoogleBooksResponse;
+  const bookItems = googleBookItems(payload);
   const isbnMatch = normalizedIsbn
-    ? payload.items?.find((item) =>
+    ? bookItems.find((item) =>
         hasMatchingIndustryIdentifier(item.volumeInfo?.industryIdentifiers, normalizedIsbn),
       )
     : undefined;
-  const volumeMatch = payload.items?.find((item) => {
+  const volumeMatch = bookItems.find((item) => {
     if (!book.volumeNumber || !item.volumeInfo?.title) return false;
     const parsed = parseSeriesTitle(item.volumeInfo.title);
     return (
@@ -807,7 +843,7 @@ async function lookupGoogleBookVolumeDetails(
       isSameSeriesTitle(parsed.seriesTitle, book.seriesTitle)
     );
   });
-  const volume = (isbnMatch ?? volumeMatch ?? payload.items?.[0])?.volumeInfo;
+  const volume = (isbnMatch ?? volumeMatch ?? bookItems[0])?.volumeInfo;
   if (!volume?.title) return null;
 
   return {

@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useLocalSearchParams, useNavigation } from 'expo-router';
+import { router, useLocalSearchParams, useNavigation } from 'expo-router';
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -34,8 +34,27 @@ export default function BookDetailsScreen() {
   const [error, setError] = useState<string | null>(null);
 
   useLayoutEffect(() => {
-    navigation.setOptions({ title: book?.volumeNumber ? `${book.volumeNumber}巻` : '巻の情報' });
-  }, [book?.volumeNumber, navigation]);
+    navigation.setOptions({
+      title: book?.volumeNumber ? `${book.volumeNumber}巻` : '巻の情報',
+      headerLeft: () => (
+        <Pressable
+          accessibilityLabel="戻る"
+          hitSlop={8}
+          onPress={() => {
+            if (navigation.canGoBack()) {
+              navigation.goBack();
+              return;
+            }
+            router.replace('/');
+          }}
+          style={styles.headerBackButton}
+        >
+          <Ionicons color={colors.text} name="chevron-back" size={22} />
+          <Text style={[styles.headerBackText, { color: colors.text }]}>戻る</Text>
+        </Pressable>
+      ),
+    });
+  }, [book?.volumeNumber, colors.text, navigation]);
 
   const loadDetails = useCallback(
     async (forceRefresh = false) => {
@@ -244,4 +263,11 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   source: { alignSelf: 'stretch', fontSize: 11, marginTop: 20 },
+  headerBackButton: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 2,
+    paddingRight: 8,
+  },
+  headerBackText: { fontSize: 15, fontWeight: '700' },
 });

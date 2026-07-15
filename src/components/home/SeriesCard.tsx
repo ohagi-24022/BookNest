@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { SeriesPublicationInfo } from '../../lib/bookApis';
 import { SeriesGroup } from '../../lib/seriesSelectors';
@@ -68,45 +68,47 @@ export function SeriesCard({
     unownedVolumes.length > 0 ||
     publicationInfo?.isCompleted;
 
+  const openSeries = () => router.push(`/series/${encodeURIComponent(group.title)}`);
+
   return (
-    <Pressable
-      onPress={() => router.push(`/series/${encodeURIComponent(group.title)}`)}
-      style={[styles.row, { backgroundColor: colors.surface, borderColor: colors.border }]}
-    >
-      <BookCover
-        thumbnailUrl={group.representative.thumbnailUrl}
-        isbn={group.representative.isbn}
-        style={styles.cover}
-      />
+    <View style={[styles.row, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+      <Pressable accessibilityLabel={`${group.title}の詳細を開く`} onPress={openSeries} style={styles.coverPress}>
+        <BookCover
+          thumbnailUrl={group.representative.thumbnailUrl}
+          isbn={group.representative.isbn}
+          style={styles.cover}
+        />
+      </Pressable>
       <View style={styles.body}>
-        {hasTopBadges ? (
-          <View style={styles.topBadgeRow}>
-            {group.unreadCount > 0 && <Text style={styles.unreadBadge}>未読 {group.unreadCount}</Text>}
-            {isAllRead && <Text style={styles.readBadge}>読了</Text>}
-            {missingVolumes.length > 0 && (
-              <Text style={styles.missingBadge}>{formatVolumeList('不足', missingVolumes)}</Text>
-            )}
-            {unownedVolumes.length > 0 && (
-              <Text style={styles.unownedBadge}>{formatVolumeList('未所持', unownedVolumes)}</Text>
-            )}
-            {publicationInfo?.isCompleted && <Text style={styles.completedBadge}>完結</Text>}
-          </View>
-        ) : null}
+        <Pressable accessibilityLabel={`${group.title}の詳細を開く`} onPress={openSeries}>
+          {hasTopBadges ? (
+            <View style={styles.topBadgeRow}>
+              {group.unreadCount > 0 && <Text style={styles.unreadBadge}>未読 {group.unreadCount}</Text>}
+              {isAllRead && <Text style={styles.readBadge}>読了</Text>}
+              {missingVolumes.length > 0 && (
+                <Text style={styles.missingBadge}>{formatVolumeList('不足', missingVolumes)}</Text>
+              )}
+              {unownedVolumes.length > 0 && (
+                <Text style={styles.unownedBadge}>{formatVolumeList('未所持', unownedVolumes)}</Text>
+              )}
+              {publicationInfo?.isCompleted && <Text style={styles.completedBadge}>完結</Text>}
+            </View>
+          ) : null}
+        </Pressable>
 
         <View style={styles.headingRow}>
-          <Text numberOfLines={2} style={[styles.title, { color: colors.text }]}>
-            {group.title}
-          </Text>
+          <Pressable accessibilityLabel={`${group.title}の詳細を開く`} onPress={openSeries} style={styles.titlePress}>
+            <Text numberOfLines={2} style={[styles.title, { color: colors.text }]}>
+              {group.title}
+            </Text>
+          </Pressable>
           <View style={styles.actions}>
-            <Pressable
+            <TouchableOpacity
               accessibilityLabel={
                 favorite ? `${group.title}のお気に入りを解除` : `${group.title}をお気に入りに追加`
               }
-              hitSlop={8}
-              onPress={(event) => {
-                event.stopPropagation();
-                onToggleFavorite();
-              }}
+              activeOpacity={0.75}
+              onPress={onToggleFavorite}
               style={[styles.iconButton, { borderColor: colors.border }]}
             >
               <Ionicons
@@ -114,17 +116,14 @@ export function SeriesCard({
                 name={favorite ? 'bookmark' : 'bookmark-outline'}
                 size={18}
               />
-            </Pressable>
-            <Pressable
+            </TouchableOpacity>
+            <TouchableOpacity
               accessibilityLabel={
                 notificationEnabled ? `${group.title}の新刊通知を解除` : `${group.title}の新刊通知を有効化`
               }
+              activeOpacity={0.75}
               disabled={notificationUpdating}
-              hitSlop={8}
-              onPress={(event) => {
-                event.stopPropagation();
-                onToggleNotification();
-              }}
+              onPress={onToggleNotification}
               style={[
                 styles.iconButton,
                 { borderColor: colors.border },
@@ -137,16 +136,13 @@ export function SeriesCard({
                 name={notificationEnabled ? 'notifications' : 'notifications-outline'}
                 size={18}
               />
-            </Pressable>
+            </TouchableOpacity>
             {showPublishedLatestVolume && (
-              <Pressable
+              <TouchableOpacity
                 accessibilityLabel={`${group.title}の刊行情報を更新`}
+                activeOpacity={0.75}
                 disabled={refreshDisabled}
-                hitSlop={8}
-                onPress={(event) => {
-                  event.stopPropagation();
-                  onRefresh();
-                }}
+                onPress={onRefresh}
                 style={[
                   styles.iconButton,
                   { borderColor: colors.border },
@@ -158,32 +154,34 @@ export function SeriesCard({
                   name={refreshing ? 'hourglass-outline' : 'refresh'}
                   size={17}
                 />
-              </Pressable>
+              </TouchableOpacity>
             )}
           </View>
         </View>
 
-        <Text style={[styles.meta, { color: colors.muted }]}>
-          {group.ownedCount}冊所持{latestLabel}
-        </Text>
-        {(group.authors.length > 0 || group.publishers.length > 0) && (
-          <Text numberOfLines={2} style={[styles.credits, { color: colors.muted }]}>
-            {[group.authors.join(', '), group.publishers.join(', ')].filter(Boolean).join(' / ')}
+        <Pressable accessibilityLabel={`${group.title}の詳細を開く`} onPress={openSeries}>
+          <Text style={[styles.meta, { color: colors.muted }]}>
+            {group.ownedCount}冊所持{latestLabel}
           </Text>
-        )}
-        <View style={[styles.progressTrack, { backgroundColor: colors.elevated }]}>
-          <View
-            style={[
-              styles.progressFill,
-              {
-                backgroundColor: missingVolumes.length > 0 || unownedVolumes.length > 0 ? '#765100' : colors.success,
-                width: `${Math.min(completionRate, 100)}%`,
-              },
-            ]}
-          />
-        </View>
+          {(group.authors.length > 0 || group.publishers.length > 0) && (
+            <Text numberOfLines={2} style={[styles.credits, { color: colors.muted }]}>
+              {[group.authors.join(', '), group.publishers.join(', ')].filter(Boolean).join(' / ')}
+            </Text>
+          )}
+          <View style={[styles.progressTrack, { backgroundColor: colors.elevated }]}>
+            <View
+              style={[
+                styles.progressFill,
+                {
+                  backgroundColor: missingVolumes.length > 0 || unownedVolumes.length > 0 ? '#765100' : colors.success,
+                  width: `${Math.min(completionRate, 100)}%`,
+                },
+              ]}
+            />
+          </View>
+        </Pressable>
       </View>
-    </Pressable>
+    </View>
   );
 }
 
@@ -199,12 +197,14 @@ const styles = StyleSheet.create({
     padding: 10,
     overflow: 'hidden',
   },
+  coverPress: { borderRadius: 4 },
   cover: { borderRadius: 4, height: 120, width: 82 },
   body: { flex: 1, minWidth: 0, paddingBottom: 4 },
   topBadgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
   headingRow: { alignItems: 'flex-start', flexDirection: 'row', gap: 8 },
-  title: { flex: 1, fontSize: 15, fontWeight: '800', lineHeight: 19 },
-  actions: { alignItems: 'center', flexDirection: 'row', gap: 6 },
+  titlePress: { flex: 1 },
+  title: { fontSize: 15, fontWeight: '800', lineHeight: 19 },
+  actions: { alignItems: 'center', flexDirection: 'row', gap: 6, zIndex: 2 },
   iconButton: {
     alignItems: 'center',
     borderRadius: 6,

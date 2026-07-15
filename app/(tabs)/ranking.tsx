@@ -14,6 +14,7 @@ import {
   rankingCategoryLabels,
 } from '../../src/lib/rankings';
 import { supabase } from '../../src/lib/supabase';
+import { isMissingSupabaseFunctionError } from '../../src/lib/supabaseErrors';
 import { useAuth } from '../../src/store/AuthContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 import { useWishlist } from '../../src/store/WishlistContext';
@@ -23,6 +24,7 @@ export default function RankingScreen() {
   const { user } = useAuth();
   const { addItem, items } = useWishlist();
   const [globalRows, setGlobalRows] = useState<GlobalRankingRow[]>([]);
+  const [globalFavoriteRows, setGlobalFavoriteRows] = useState<GlobalRankingRow[]>([]);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,16 +38,17 @@ export default function RankingScreen() {
     () =>
       rankingCategories.map((category) => ({
         category,
-        rows: buildRankingRows(category, globalRows, items),
+        rows: buildRankingRows(category, category === 'favorite' ? globalFavoriteRows : globalRows, items),
         ...rankingCategoryLabels[category],
       })),
-    [globalRows, items],
+    [globalFavoriteRows, globalRows, items],
   );
 
   const loadRankings = async () => {
     if (!user) {
       setError('ランキングはログイン後に確認できます。');
       setGlobalRows([]);
+      setGlobalFavoriteRows([]);
       return;
     }
     if (!supabase) {
@@ -58,6 +61,17 @@ export default function RankingScreen() {
       const { data, error: rpcError } = await supabase.rpc('get_wanted_manga_rankings', { limit_count: 50 });
       if (rpcError) throw rpcError;
       setGlobalRows((data ?? []) as GlobalRankingRow[]);
+      const { data: favoriteData, error: favoriteRpcError } = await supabase.rpc('get_favorite_series_rankings', {
+        limit_count: 50,
+      });
+      if (favoriteRpcError) {
+        if (!isMissingSupabaseFunctionError(favoriteRpcError)) {
+          console.warn('Failed to load favorite rankings', favoriteRpcError);
+        }
+        setGlobalFavoriteRows([]);
+      } else {
+        setGlobalFavoriteRows((favoriteData ?? []) as GlobalRankingRow[]);
+      }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'ランキングを取得できませんでした。');
     } finally {
@@ -97,7 +111,7 @@ export default function RankingScreen() {
           description={section.description}
           expandedKey={expandedKey}
           onAddWishlist={
-            section.category === 'personal' || section.category === 'favorite'
+            section.category === 'personal'
               ? undefined
               : (row) =>
                   addItem({
