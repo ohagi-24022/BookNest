@@ -103,7 +103,7 @@ export function RankingCard({
         >
           <Ionicons color={added ? colors.muted : colors.background} name={added ? 'checkmark' : 'add'} size={16} />
           <Text style={[styles.wideAddText, { color: added ? colors.muted : colors.background }]}>
-            {added ? '追加済み' : '欲しいに追加'}
+            {added ? '済み' : '追加'}
           </Text>
         </Pressable>
       ) : null}
@@ -187,7 +187,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 5,
     height: 38,
-    paddingHorizontal: 12,
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    width: 72,
   },
-  wideAddText: { fontSize: 13, fontWeight: '900' },
+  wideAddText: { fontSize: 12, fontWeight: '900' },
 });

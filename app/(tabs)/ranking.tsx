@@ -2,7 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useScrollToTop } from '@react-navigation/native';
 import { router } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { RankingCard } from '../../src/components/RankingCard';
 import { buildPurchaseUrl } from '../../src/lib/bookApis';
@@ -75,24 +75,16 @@ export default function RankingScreen() {
       ref={scrollRef}
       style={[styles.screen, { backgroundColor: colors.background }]}
       contentContainerStyle={styles.content}
+      refreshControl={
+        <RefreshControl refreshing={loading} onRefresh={() => void loadRankings()} tintColor={colors.text} />
+      }
     >
       <Pressable onPress={() => setExpandedKey(null)} style={styles.header}>
         <View style={styles.titleRow}>
           <Text style={[styles.title, { color: colors.text }]}>ランキング</Text>
-          <Pressable
-            accessibilityLabel="ランキングを更新"
-            onPress={() => void loadRankings()}
-            style={[styles.refreshButton, { borderColor: colors.border }]}
-          >
-            {loading ? (
-              <ActivityIndicator color={colors.text} size="small" />
-            ) : (
-              <Ionicons color={colors.text} name="refresh" size={17} />
-            )}
-          </Pressable>
         </View>
         <Text style={[styles.copy, { color: colors.muted }]}>
-          カテゴリごとに上位10件を表示します。もっと見るから各ランキングをまとめて確認できます。
+          カテゴリごとに上位10件を表示します。画面上部から下に引くと最新のランキングに更新できます。
         </Text>
       </Pressable>
 
@@ -226,14 +218,6 @@ const styles = StyleSheet.create({
   header: { gap: 5 },
   titleRow: { alignItems: 'center', flexDirection: 'row', gap: 10 },
   title: { flex: 1, fontSize: 24, fontWeight: '900' },
-  refreshButton: {
-    alignItems: 'center',
-    borderRadius: 8,
-    borderWidth: 1,
-    height: 36,
-    justifyContent: 'center',
-    width: 36,
-  },
   copy: { fontSize: 13, lineHeight: 18 },
   section: { gap: 12 },
   sectionHeader: { alignItems: 'flex-start', flexDirection: 'row', gap: 12 },

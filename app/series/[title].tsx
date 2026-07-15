@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as WebBrowser from 'expo-web-browser';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { useLayoutEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -23,6 +23,7 @@ import { useAppTheme } from '../../src/store/ThemeContext';
 import { useWishlist } from '../../src/store/WishlistContext';
 import { Book, ReadingStatus, ShelfItem } from '../../src/types';
 
+const PAGE_SIZE = 10;
 const statusLabels: Record<ReadingStatus, string> = {
   unread: '未読',
   reading: '読書中',
@@ -49,15 +50,23 @@ export default function SeriesScreen() {
     toggleFavoriteSeries,
   } = useAppSettings();
   const { colors } = useAppTheme();
+  const listRef = useRef<FlatList<ShelfItem>>(null);
+  const shouldKeepBottomRef = useRef(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
   const [draftSeries, setDraftSeries] = useState('');
   const [draftVolume, setDraftVolume] = useState('');
   const [renameOpen, setRenameOpen] = useState(false);
   const [draftSeriesTitle, setDraftSeriesTitle] = useState(seriesTitle);
 
   const items = useMemo(() => getSeriesItems(seriesTitle), [getSeriesItems, seriesTitle]);
+  const pageCount = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const pageItems = useMemo(
+    () => items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [items, page],
+  );
   const ownedItems = useMemo(() => items.filter(isOwnedBook), [items]);
   const selectedCount = selectedIds.length;
   const allSelected = ownedItems.length > 0 && selectedCount === ownedItems.length;
@@ -82,6 +91,19 @@ export default function SeriesScreen() {
       ),
     });
   }, [colors.muted, favorite, navigation, seriesTitle, toggleFavoriteSeries]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [seriesTitle]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
+
+  const changePageFromBottom = (nextPage: number) => {
+    shouldKeepBottomRef.current = true;
+    setPage(nextPage);
+  };
 
   const toggleSelected = (item: ShelfItem) => {
     if (!isOwnedBook(item)) {
@@ -351,9 +373,33 @@ export default function SeriesScreen() {
       )}
 
       <FlatList
-        data={items}
+        ref={listRef}
+        data={pageItems}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
+        onContentSizeChange={() => {
+          if (!shouldKeepBottomRef.current) return;
+          shouldKeepBottomRef.current = false;
+          requestAnimationFrame(() => {
+            listRef.current?.scrollToEnd({ animated: false });
+          });
+        }}
+        ListHeaderComponent={
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            onChange={setPage}
+          />
+        }
+        ListFooterComponent={
+          <View style={styles.footerPagination}>
+            <Pagination
+              page={page}
+              pageCount={pageCount}
+              onChange={changePageFromBottom}
+            />
+          </View>
+        }
         renderItem={({ item }) => {
           const selected = selectedIds.includes(item.id);
           const missing = item.isMissing;
@@ -523,6 +569,54 @@ export default function SeriesScreen() {
   );
 }
 
+function Pagination({
+  page,
+  pageCount,
+  onChange,
+}: {
+  page: number;
+  pageCount: number;
+  onChange: (page: number) => void;
+}) {
+  const { colors } = useAppTheme();
+  if (pageCount <= 1) return null;
+
+  return (
+    <View style={styles.pagination}>
+      <Pressable
+        accessibilityLabel="前のページを表示"
+        disabled={page === 1}
+        onPress={() => onChange(Math.max(1, page - 1))}
+        style={[
+          styles.pageArrowButton,
+          { borderColor: colors.border },
+          page === 1 && styles.disabledButton,
+        ]}
+      >
+        <Text style={[styles.pageArrowText, { color: colors.text }]}>{'<'}</Text>
+      </Pressable>
+      <View style={[styles.pageNumberBox, { backgroundColor: colors.text, borderColor: colors.text }]}>
+        <Text style={[styles.pageNumberText, { color: colors.background }]}>
+          {page}
+          <Text style={styles.pageCountText}> / {pageCount}</Text>
+        </Text>
+      </View>
+      <Pressable
+        accessibilityLabel="次のページを表示"
+        disabled={page === pageCount}
+        onPress={() => onChange(Math.min(pageCount, page + 1))}
+        style={[
+          styles.pageArrowButton,
+          { borderColor: colors.border },
+          page === pageCount && styles.disabledButton,
+        ]}
+      >
+        <Text style={[styles.pageArrowText, { color: colors.text }]}>{'>'}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   bulkBar: {
@@ -582,6 +676,28 @@ const styles = StyleSheet.create({
   },
   renameSaveButton: { height: 40, marginTop: 0, paddingHorizontal: 16 },
   list: { padding: 14, paddingBottom: 28 },
+  footerPagination: { paddingBottom: 16 },
+  pagination: { alignItems: 'center', flexDirection: 'row', gap: 10, justifyContent: 'center', paddingTop: 8 },
+  pageArrowButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 34,
+    justifyContent: 'center',
+    width: 42,
+  },
+  pageArrowText: { fontSize: 18, fontWeight: '900' },
+  pageNumberBox: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 34,
+    justifyContent: 'center',
+    minWidth: 86,
+    paddingHorizontal: 12,
+  },
+  pageNumberText: { fontSize: 13, fontWeight: '900' },
+  pageCountText: { fontSize: 11, fontWeight: '800' },
   row: {
     alignItems: 'center',
     borderRadius: 8,
@@ -589,6 +705,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
     marginBottom: 10,
+    minHeight: 176,
     padding: 10,
   },
   checkbox: {

@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { RankingCard } from '../../src/components/RankingCard';
 import { buildPurchaseUrl } from '../../src/lib/bookApis';
@@ -15,6 +15,8 @@ import { supabase } from '../../src/lib/supabase';
 import { useAuth } from '../../src/store/AuthContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 import { useWishlist } from '../../src/store/WishlistContext';
+
+const PAGE_SIZE = 10;
 
 function parseCategory(value: string | string[] | undefined): RankingCategory {
   const category = Array.isArray(value) ? value[0] : value;
@@ -31,9 +33,15 @@ export default function RankingCategoryScreen() {
   const [globalRows, setGlobalRows] = useState<GlobalRankingRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
   const label = rankingCategoryLabels[category];
 
   const rows = useMemo(() => buildRankingRows(category, globalRows, items), [category, globalRows, items]);
+  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const pageRows = useMemo(
+    () => rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [page, rows],
+  );
   const addedTitles = useMemo(() => new Set(items.map((item) => normalizeRankingTitle(item.title))), [items]);
 
   const loadRankings = async () => {
@@ -67,30 +75,32 @@ export default function RankingCategoryScreen() {
     void loadRankings();
   }, [category, user]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [category]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
+
   return (
     <>
       <Stack.Screen options={{ title: label.title }} />
       <ScrollView
         style={[styles.screen, { backgroundColor: colors.background }]}
         contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl refreshing={loading} onRefresh={() => void loadRankings()} tintColor={colors.text} />
+        }
       >
         <View style={styles.header}>
           <View style={styles.titleRow}>
             <View style={styles.titleBlock}>
               <Text style={[styles.title, { color: colors.text }]}>{label.title}</Text>
-              <Text style={[styles.copy, { color: colors.muted }]}>{label.description}</Text>
+              <Text style={[styles.copy, { color: colors.muted }]}>
+                {label.description} 画面上部から下に引くと更新できます。
+              </Text>
             </View>
-            <Pressable
-              accessibilityLabel={`${label.title}を更新`}
-              onPress={() => void loadRankings()}
-              style={[styles.refreshButton, { borderColor: colors.border }]}
-            >
-              {loading ? (
-                <ActivityIndicator color={colors.text} size="small" />
-              ) : (
-                <Ionicons color={colors.text} name="refresh" size={17} />
-              )}
-            </Pressable>
           </View>
         </View>
 
@@ -100,11 +110,16 @@ export default function RankingCategoryScreen() {
           <EmptyState icon="podium-outline" text="まだ表示できるデータがありません。" />
         ) : (
           <View style={styles.list}>
-            {rows.map((row, index) => (
+            <Pagination
+              page={page}
+              pageCount={pageCount}
+              onChange={setPage}
+            />
+            {pageRows.map((row, index) => (
               <RankingCard
-                key={`${category}-${row.title}-${index}`}
+                key={`${category}-${row.title}-${(page - 1) * PAGE_SIZE + index}`}
                 added={addedTitles.has(normalizeRankingTitle(row.title))}
-                index={index}
+                index={(page - 1) * PAGE_SIZE + index}
                 onAddWishlist={
                   category === 'personal'
                     ? undefined
@@ -119,10 +134,63 @@ export default function RankingCategoryScreen() {
                 row={row}
               />
             ))}
+            <Pagination
+              page={page}
+              pageCount={pageCount}
+              onChange={setPage}
+            />
           </View>
         )}
       </ScrollView>
     </>
+  );
+}
+
+function Pagination({
+  page,
+  pageCount,
+  onChange,
+}: {
+  page: number;
+  pageCount: number;
+  onChange: (page: number) => void;
+}) {
+  const { colors } = useAppTheme();
+  if (pageCount <= 1) return null;
+
+  return (
+    <View style={styles.pagination}>
+      <Pressable
+        accessibilityLabel="前のページを表示"
+        disabled={page === 1}
+        onPress={() => onChange(Math.max(1, page - 1))}
+        style={[
+          styles.pageArrowButton,
+          { borderColor: colors.border },
+          page === 1 && styles.disabledButton,
+        ]}
+      >
+        <Text style={[styles.pageArrowText, { color: colors.text }]}>{'<'}</Text>
+      </Pressable>
+      <View style={[styles.pageNumberBox, { backgroundColor: colors.text, borderColor: colors.text }]}>
+        <Text style={[styles.pageNumberText, { color: colors.background }]}>
+          {page}
+          <Text style={styles.pageCountText}> / {pageCount}</Text>
+        </Text>
+      </View>
+      <Pressable
+        accessibilityLabel="次のページを表示"
+        disabled={page === pageCount}
+        onPress={() => onChange(Math.min(pageCount, page + 1))}
+        style={[
+          styles.pageArrowButton,
+          { borderColor: colors.border },
+          page === pageCount && styles.disabledButton,
+        ]}
+      >
+        <Text style={[styles.pageArrowText, { color: colors.text }]}>{'>'}</Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -155,14 +223,28 @@ const styles = StyleSheet.create({
   titleBlock: { flex: 1, gap: 4 },
   title: { fontSize: 24, fontWeight: '900' },
   copy: { fontSize: 13, lineHeight: 18 },
-  refreshButton: {
+  list: { gap: 8 },
+  disabledButton: { opacity: 0.35 },
+  pagination: { alignItems: 'center', flexDirection: 'row', gap: 10, justifyContent: 'center', paddingTop: 8 },
+  pageArrowButton: {
     alignItems: 'center',
     borderRadius: 8,
     borderWidth: 1,
-    height: 36,
+    height: 34,
     justifyContent: 'center',
-    width: 36,
+    width: 42,
   },
-  list: { gap: 8 },
+  pageArrowText: { fontSize: 18, fontWeight: '900' },
+  pageNumberBox: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 34,
+    justifyContent: 'center',
+    minWidth: 86,
+    paddingHorizontal: 12,
+  },
+  pageNumberText: { fontSize: 13, fontWeight: '900' },
+  pageCountText: { fontSize: 11, fontWeight: '800' },
   emptyBox: { alignItems: 'center', borderRadius: 8, borderWidth: 1, gap: 6, padding: 18 },
 });
