@@ -1,3 +1,4 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Animated, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useAppTheme } from '../../store/ThemeContext';
@@ -38,6 +39,15 @@ export function HomeToolbar({
   onOpenSort,
 }: HomeToolbarProps) {
   const { colors } = useAppTheme();
+  const countLabel = requiresAuth
+    ? '設定からログインしてください'
+    : visibleCount === totalCount
+      ? viewMode === 'series'
+        ? `全${totalCount}シリーズ`
+        : `全${totalCount}冊`
+      : viewMode === 'series'
+        ? `${visibleCount}シリーズを表示`
+        : `${visibleCount}冊を表示`;
 
   return (
     <Animated.View
@@ -52,17 +62,7 @@ export function HomeToolbar({
       ]}
     >
       <Text style={[styles.title, { color: colors.text }]}>BookNest</Text>
-      <Text style={[styles.subtitle, { color: colors.muted }]}>
-        {requiresAuth
-          ? '設定からログインしてください'
-          : visibleCount === totalCount
-            ? viewMode === 'series'
-              ? `全${totalCount}シリーズ`
-              : `全${totalCount}冊`
-            : viewMode === 'series'
-              ? `${visibleCount}シリーズを表示`
-              : `${visibleCount}冊を表示`}
-      </Text>
+      <Text style={[styles.subtitle, { color: colors.muted }]}>{countLabel}</Text>
 
       {loading && (
         <View style={[styles.notice, { backgroundColor: colors.elevated }]}>
@@ -76,54 +76,51 @@ export function HomeToolbar({
         </View>
       )}
 
-      <TextInput
-        value={query}
-        onChangeText={onQueryChange}
-        placeholder="本棚を検索"
-        placeholderTextColor={colors.muted}
-        style={[styles.search, { backgroundColor: colors.input, color: colors.text }]}
-      />
-
-      <View style={styles.controlRow}>
-        <View style={[styles.modeSwitch, { backgroundColor: colors.elevated }]}>
-          {([
-            ['series', 'シリーズ'],
-            ['books', '全冊'],
-          ] as const).map(([value, label]) => (
-            <Pressable
-              key={value}
-              onPress={() => onViewModeChange(value)}
-              style={[styles.modeButton, viewMode === value && { backgroundColor: colors.text }]}
-            >
-              <Text
-                style={[
-                  styles.modeText,
-                  { color: viewMode === value ? colors.background : colors.muted },
-                ]}
-              >
-                {label}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
+      <View style={styles.searchRow}>
+        <TextInput
+          value={query}
+          onChangeText={onQueryChange}
+          placeholder="本棚を検索"
+          placeholderTextColor={colors.muted}
+          style={[styles.search, { backgroundColor: colors.input, color: colors.text }]}
+        />
         <Pressable
+          accessibilityLabel={`表示条件を開く。現在: ${filterLabel}`}
           onPress={onOpenFilter}
-          style={[styles.menuButton, { borderColor: colors.border }]}
+          style={[styles.iconButton, { borderColor: colors.border }]}
         >
-          <Text numberOfLines={1} style={[styles.menuButtonText, { color: colors.text }]}>
-            条件: {filterLabel}
-          </Text>
-          <Text style={[styles.menuChevron, { color: colors.muted }]}>▼</Text>
+          <Ionicons color={colors.text} name="filter" size={18} />
         </Pressable>
         <Pressable
+          accessibilityLabel={`並び替えを開く。現在: ${sortLabel}`}
           onPress={onOpenSort}
-          style={[styles.menuButton, { borderColor: colors.border }]}
+          style={[styles.iconButton, { borderColor: colors.border }]}
         >
-          <Text numberOfLines={1} style={[styles.menuButtonText, { color: colors.text }]}>
-            並び: {sortLabel}
-          </Text>
-          <Text style={[styles.menuChevron, { color: colors.muted }]}>▼</Text>
+          <Ionicons color={colors.text} name="swap-vertical" size={18} />
         </Pressable>
+      </View>
+
+      <View style={[styles.modeSwitch, { backgroundColor: colors.elevated }]}>
+        {([
+          ['series', 'シリーズ'],
+          ['books', '全冊'],
+        ] as const).map(([value, label]) => (
+          <Pressable
+            accessibilityLabel={`${label}表示に切り替え`}
+            key={value}
+            onPress={() => onViewModeChange(value)}
+            style={[styles.modeButton, viewMode === value && { backgroundColor: colors.text }]}
+          >
+            <Text
+              style={[
+                styles.modeText,
+                { color: viewMode === value ? colors.background : colors.muted },
+              ]}
+            >
+              {label}
+            </Text>
+          </Pressable>
+        ))}
       </View>
     </Animated.View>
   );
@@ -145,24 +142,32 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 12, marginTop: 1 },
   notice: {
     borderRadius: 8,
+    justifyContent: 'center',
     marginTop: 8,
     minHeight: 44,
-    justifyContent: 'center',
     paddingHorizontal: 12,
   },
   noticeText: { fontSize: 13, fontWeight: '700' },
+  searchRow: { alignItems: 'center', flexDirection: 'row', gap: 6, marginTop: 8 },
   search: {
     borderRadius: 8,
+    flex: 1,
     fontSize: 14,
     height: 38,
-    marginTop: 8,
     paddingHorizontal: 12,
   },
-  controlRow: { flexDirection: 'row', gap: 6, marginTop: 8 },
+  iconButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 38,
+    justifyContent: 'center',
+    width: 42,
+  },
   modeSwitch: {
     borderRadius: 8,
-    flex: 1.2,
     flexDirection: 'row',
+    marginTop: 8,
     padding: 3,
   },
   modeButton: {
@@ -173,17 +178,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   modeText: { fontSize: 12, fontWeight: '800' },
-  menuButton: {
-    alignItems: 'center',
-    borderRadius: 8,
-    borderWidth: 1,
-    flex: 1,
-    flexDirection: 'row',
-    height: 38,
-    justifyContent: 'center',
-    minWidth: 0,
-    paddingHorizontal: 8,
-  },
-  menuButtonText: { flexShrink: 1, fontSize: 11, fontWeight: '800' },
-  menuChevron: { fontSize: 8, marginLeft: 4 },
 });

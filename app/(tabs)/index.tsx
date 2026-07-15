@@ -16,10 +16,7 @@ import { EmptyLibraryState } from '../../src/components/home/EmptyLibraryState';
 import { HomeToolbar } from '../../src/components/home/HomeToolbar';
 import { OptionSheet } from '../../src/components/home/OptionSheet';
 import { SeriesCard } from '../../src/components/home/SeriesCard';
-import {
-  lookupLatestSeriesPublication,
-  SeriesPublicationInfo,
-} from '../../src/lib/bookApis';
+import { lookupLatestSeriesPublication, SeriesPublicationInfo } from '../../src/lib/bookApis';
 import {
   getNewReleaseSubscriptions,
   setNewReleaseSeriesSubscription,
@@ -27,6 +24,7 @@ import {
 } from '../../src/lib/newReleaseNotifications';
 import { getMissingVolumes, normalizeSeriesKey } from '../../src/lib/series';
 import { SeriesGroup } from '../../src/lib/seriesSelectors';
+import { supabase } from '../../src/lib/supabase';
 import { useAppSettings } from '../../src/store/AppSettingsContext';
 import { useAuth } from '../../src/store/AuthContext';
 import { useLibrary } from '../../src/store/LibraryContext';
@@ -38,29 +36,21 @@ type HomeFilter =
   | 'all'
   | 'missing'
   | 'favorite'
+  | 'completed'
+  | 'ongoing'
   | `author:${string}`
   | `publisher:${string}`;
-type SeriesSort =
-  | 'title'
-  | 'recent'
-  | 'missing'
-  | 'unread'
-  | 'completion'
-  | 'favorite'
-  | 'author'
-  | 'publisher';
-type BookSort =
-  | 'recent'
-  | 'title'
-  | 'series'
-  | 'volume'
-  | 'status'
-  | 'favorite'
-  | 'author'
-  | 'publisher';
+type SeriesSort = 'title' | 'recent' | 'missing' | 'unread' | 'completion' | 'favorite' | 'author' | 'publisher';
+type BookSort = 'recent' | 'title' | 'series' | 'volume' | 'status' | 'favorite' | 'author' | 'publisher';
 type SeriesPublicationCache = Record<string, SeriesPublicationInfo>;
+type SeriesStats = {
+  completionRate: number;
+  internalMissingVolumes: number[];
+  missingVolumes: number[];
+  trailingUnownedVolumes: number[];
+};
 
-const SERIES_PUBLICATION_STORAGE_KEY = 'booknest.series-publication.v1';
+export const SERIES_PUBLICATION_STORAGE_KEY = 'booknest.series-publication.v1';
 
 const filterOptions: Array<{ label: string; value: HomeFilter }> = [
   { label: 'すべて', value: 'all' },
@@ -69,24 +59,24 @@ const filterOptions: Array<{ label: string; value: HomeFilter }> = [
   { label: '読了', value: 'read' },
   { label: '巻抜け', value: 'missing' },
   { label: 'お気に入り', value: 'favorite' },
+  { label: '完結済み', value: 'completed' },
+  { label: '未完結', value: 'ongoing' },
 ];
 const filterCategoryOptions = [
   ...filterOptions,
   { label: '作者で絞る', value: 'select-author' },
   { label: '出版社で絞る', value: 'select-publisher' },
 ];
-
 const seriesSortOptions: Array<{ label: string; value: SeriesSort }> = [
   { label: '名前順', value: 'title' },
   { label: '最近追加', value: 'recent' },
   { label: '巻抜け優先', value: 'missing' },
-  { label: '積読優先', value: 'unread' },
+  { label: '未読優先', value: 'unread' },
   { label: '所持率順', value: 'completion' },
   { label: 'お気に入り優先', value: 'favorite' },
-  { label: '著者順', value: 'author' },
+  { label: '作者順', value: 'author' },
   { label: '出版社順', value: 'publisher' },
 ];
-
 const bookSortOptions: Array<{ label: string; value: BookSort }> = [
   { label: '最近追加', value: 'recent' },
   { label: 'タイトル順', value: 'title' },
@@ -94,33 +84,24 @@ const bookSortOptions: Array<{ label: string; value: BookSort }> = [
   { label: '巻数順', value: 'volume' },
   { label: '読書状態順', value: 'status' },
   { label: 'お気に入り優先', value: 'favorite' },
-  { label: '著者順', value: 'author' },
+  { label: '作者順', value: 'author' },
   { label: '出版社順', value: 'publisher' },
 ];
-
-const readingStatusOrder: Record<ReadingStatus, number> = {
-  reading: 0,
-  unread: 1,
-  read: 2,
-};
-
+const readingStatusOrder: Record<ReadingStatus, number> = { reading: 0, unread: 1, read: 2 };
 const readingFilters: ReadingStatus[] = ['unread', 'reading', 'read'];
+
+function getActiveFilters(filters: HomeFilter[]) {
+  return filters.includes('all') ? [] : filters;
+}
 
 function getMetadataFilter(filter: HomeFilter) {
   if (filter.startsWith('author:')) {
     return { field: 'author' as const, value: decodeURIComponent(filter.slice('author:'.length)) };
   }
   if (filter.startsWith('publisher:')) {
-    return {
-      field: 'publisher' as const,
-      value: decodeURIComponent(filter.slice('publisher:'.length)),
-    };
+    return { field: 'publisher' as const, value: decodeURIComponent(filter.slice('publisher:'.length)) };
   }
   return null;
-}
-
-function getActiveFilters(filters: HomeFilter[]) {
-  return filters.includes('all') ? [] : filters;
 }
 
 function getSelectedMetadataFilters(filters: HomeFilter[]) {
@@ -150,24 +131,18 @@ function removeFilterGroup(filters: HomeFilter[], prefix: 'author:' | 'publisher
 }
 
 function getTrailingUnownedVolumes(ownedLatestVolume?: number, publishedLatestVolume?: number) {
-  if (!ownedLatestVolume || !publishedLatestVolume || publishedLatestVolume <= ownedLatestVolume) {
-    return [];
-  }
+  if (!ownedLatestVolume || !publishedLatestVolume || publishedLatestVolume <= ownedLatestVolume) return [];
+  return Array.from({ length: publishedLatestVolume - ownedLatestVolume }, (_, index) => ownedLatestVolume + index + 1);
+}
 
-  return Array.from(
-    { length: publishedLatestVolume - ownedLatestVolume },
-    (_, index) => ownedLatestVolume + index + 1,
-  );
+function normalizeText(value: string) {
+  return value.normalize('NFKC').toLowerCase();
 }
 
 export default function HomeScreen() {
   const { colors } = useAppTheme();
-  const {
-    favoriteSeriesKeys,
-    newReleaseNotifications,
-    showPublishedLatestVolume,
-    toggleFavoriteSeries,
-  } = useAppSettings();
+  const { favoriteSeriesKeys, newReleaseNotifications, showPublishedLatestVolume, toggleFavoriteSeries } =
+    useAppSettings();
   const { user } = useAuth();
   const { books, error, loading, requiresAuth, seriesGroups } = useLibrary();
   const [filters, setFilters] = useState<HomeFilter[]>(['all']);
@@ -175,9 +150,7 @@ export default function HomeScreen() {
   const [seriesSort, setSeriesSort] = useState<SeriesSort>('title');
   const [bookSort, setBookSort] = useState<BookSort>('recent');
   const [query, setQuery] = useState('');
-  const [openMenu, setOpenMenu] = useState<
-    'filter' | 'sort' | 'author' | 'publisher' | null
-  >(null);
+  const [openMenu, setOpenMenu] = useState<'filter' | 'sort' | 'author' | 'publisher' | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(152);
   const [publicationCache, setPublicationCache] = useState<SeriesPublicationCache>({});
   const [refreshingSeriesTitle, setRefreshingSeriesTitle] = useState<string | null>(null);
@@ -192,10 +165,7 @@ export default function HomeScreen() {
   const lastScrollYRef = useRef(0);
   const directionDistanceRef = useRef(0);
   const lastDirectionRef = useRef<1 | -1>(1);
-  const favoriteSeriesKeySet = useMemo(
-    () => new Set(favoriteSeriesKeys),
-    [favoriteSeriesKeys],
-  );
+  const favoriteSeriesKeySet = useMemo(() => new Set(favoriteSeriesKeys), [favoriteSeriesKeys]);
   activeViewModeRef.current = viewMode;
 
   useEffect(() => {
@@ -203,9 +173,7 @@ export default function HomeScreen() {
       .then((storedCache) => {
         if (storedCache) setPublicationCache(JSON.parse(storedCache) as SeriesPublicationCache);
       })
-      .catch((cacheError) => {
-        console.warn('Failed to load series publication cache', cacheError);
-      });
+      .catch((cacheError) => console.warn('Failed to load series publication cache', cacheError));
   }, []);
 
   useEffect(() => {
@@ -220,18 +188,14 @@ export default function HomeScreen() {
       .then((subscriptions) => {
         if (cancelled) return;
         setNotificationSeriesKeys(
-          subscriptions
-            .filter((subscription) => subscription.enabled)
-            .map((subscription) => subscription.seriesKey),
+          subscriptions.filter((subscription) => subscription.enabled).map((subscription) => subscription.seriesKey),
         );
       })
       .catch((notificationError) => {
         if (cancelled) return;
         Alert.alert(
           '通知対象を読み込めませんでした',
-          notificationError instanceof Error
-            ? notificationError.message
-            : '通信状態を確認して、もう一度お試しください。',
+          notificationError instanceof Error ? notificationError.message : '通信状態を確認してもう一度お試しください。',
         );
       });
 
@@ -240,22 +204,64 @@ export default function HomeScreen() {
     };
   }, [newReleaseNotifications, seriesGroups, user]);
 
+  useEffect(() => {
+    if (!user || !supabase) return;
+    const client = supabase;
+
+    const favoriteKeySet = new Set(favoriteSeriesKeys);
+    const favoriteRows = seriesGroups
+      .filter((group) => favoriteKeySet.has(normalizeSeriesKey(group.title)))
+      .map((group) => ({
+        user_id: user.id,
+        series_key: normalizeSeriesKey(group.title),
+        series_title: group.title,
+        cover_url: group.representative.thumbnailUrl ?? null,
+        owned_volume_count: group.ownedCount,
+        updated_at: new Date().toISOString(),
+      }));
+
+    const syncFavoriteSeries = async () => {
+      const { data: existingRows, error: fetchError } = await client
+        .from('favorite_series')
+        .select('series_key')
+        .eq('user_id', user.id);
+      if (fetchError) throw fetchError;
+
+      if (favoriteRows.length > 0) {
+        const { error: upsertError } = await client
+          .from('favorite_series')
+          .upsert(favoriteRows, { onConflict: 'user_id,series_key' });
+        if (upsertError) throw upsertError;
+      }
+
+      const staleKeys = (existingRows ?? [])
+        .map((row) => row.series_key as string)
+        .filter((seriesKey) => !favoriteKeySet.has(seriesKey));
+      if (staleKeys.length > 0) {
+        const { error: deleteError } = await client
+          .from('favorite_series')
+          .delete()
+          .eq('user_id', user.id)
+          .in('series_key', staleKeys);
+        if (deleteError) throw deleteError;
+      }
+    };
+
+    syncFavoriteSeries().catch((favoriteSyncError) => {
+      console.warn('Failed to sync favorite series rankings', favoriteSyncError);
+    });
+  }, [favoriteSeriesKeys, seriesGroups, user]);
+
   const metadataFilterOptions = useMemo(() => {
     const authors = [...new Set(seriesGroups.flatMap((group) => group.authors))]
       .sort((left, right) => left.localeCompare(right))
-      .map((author) => ({
-        label: author,
-        value: `author:${encodeURIComponent(author)}` as HomeFilter,
-      }));
+      .map((author) => ({ label: author, value: `author:${encodeURIComponent(author)}` as HomeFilter }));
     const publishers = [...new Set(seriesGroups.flatMap((group) => group.publishers))]
       .sort((left, right) => left.localeCompare(right))
-      .map((publisher) => ({
-        label: publisher,
-        value: `publisher:${encodeURIComponent(publisher)}` as HomeFilter,
-      }));
-
+      .map((publisher) => ({ label: publisher, value: `publisher:${encodeURIComponent(publisher)}` as HomeFilter }));
     return { authors, publishers };
   }, [seriesGroups]);
+
   const seriesStats = useMemo(() => {
     const bySeries = new Map<string, Book[]>();
     books.forEach((book) => {
@@ -265,28 +271,37 @@ export default function HomeScreen() {
       bySeries.set(seriesKey, group);
     });
 
-    return new Map(
-      [...bySeries.entries()].map(([title, groupedBooks]) => {
+    return new Map<string, SeriesStats>(
+      [...bySeries.entries()].map(([seriesKey, groupedBooks]) => {
         const volumes = groupedBooks
           .map((book) => book.volumeNumber)
           .filter((volume): volume is number => !!volume);
-        const missingVolumes = getMissingVolumes(volumes);
         const latestVolume = volumes.length > 0 ? Math.max(...volumes) : undefined;
-        const completionRate =
-          latestVolume && latestVolume > 0 ? Math.round((groupedBooks.length / latestVolume) * 100) : 100;
-
-        return [title, { missingVolumes, completionRate }] as const;
+        const publishedLatestVolume = publicationCache[seriesKey]?.latestVolume;
+        const internalMissingVolumes = getMissingVolumes(volumes);
+        const trailingUnownedVolumes = getTrailingUnownedVolumes(latestVolume, publishedLatestVolume);
+        const missingVolumes = [...new Set([...internalMissingVolumes, ...trailingUnownedVolumes])].sort(
+          (left, right) => left - right,
+        );
+        const denominator = Math.max(latestVolume ?? 0, publishedLatestVolume ?? 0);
+        const completionRate = denominator > 0 ? Math.round((groupedBooks.length / denominator) * 100) : 100;
+        return [seriesKey, { completionRate, internalMissingVolumes, missingVolumes, trailingUnownedVolumes }] as const;
       }),
     );
-  }, [books]);
+  }, [books, publicationCache]);
+
   const visibleGroups = useMemo(() => {
     const activeFilters = getActiveFilters(filters);
     const metadataFilters = getSelectedMetadataFilters(filters);
     const statusFilters = activeFilters.filter((filter): filter is ReadingStatus =>
       readingFilters.includes(filter as ReadingStatus),
     );
+    const keyword = normalizeText(query);
+
     const filtered = seriesGroups.filter((group) => {
-      const stats = seriesStats.get(normalizeSeriesKey(group.title));
+      const seriesKey = normalizeSeriesKey(group.title);
+      const stats = seriesStats.get(seriesKey);
+      const publicationInfo = publicationCache[seriesKey];
       const matchesStatus =
         statusFilters.length === 0 ||
         statusFilters.some(
@@ -295,24 +310,20 @@ export default function HomeScreen() {
             (status === 'reading' && group.readingCount > 0) ||
             (status === 'read' && group.readCount === group.ownedCount),
         );
-      const matchesMissing =
-        !activeFilters.includes('missing') || (stats?.missingVolumes.length ?? 0) > 0;
-      const matchesFavorite =
-        !activeFilters.includes('favorite') ||
-        favoriteSeriesKeySet.has(normalizeSeriesKey(group.title));
-      const matchesAuthor =
-        metadataFilters.authors.length === 0 ||
-        group.authors.some((author) => metadataFilters.authors.includes(author));
-      const matchesPublisher =
-        metadataFilters.publishers.length === 0 ||
-        group.publishers.some((publisher) => metadataFilters.publishers.includes(publisher));
       const matchesFilter =
-        matchesStatus && matchesMissing && matchesFavorite && matchesAuthor && matchesPublisher;
-      const keyword = query.toLowerCase();
+        matchesStatus &&
+        (!activeFilters.includes('missing') || (stats?.missingVolumes.length ?? 0) > 0) &&
+        (!activeFilters.includes('favorite') || favoriteSeriesKeySet.has(seriesKey)) &&
+        (!activeFilters.includes('completed') || publicationInfo?.isCompleted === true) &&
+        (!activeFilters.includes('ongoing') || publicationInfo?.isCompleted !== true) &&
+        (metadataFilters.authors.length === 0 ||
+          group.authors.some((author) => metadataFilters.authors.includes(author))) &&
+        (metadataFilters.publishers.length === 0 ||
+          group.publishers.some((publisher) => metadataFilters.publishers.includes(publisher)));
       const matchesQuery =
-        group.title.toLowerCase().includes(keyword) ||
-        group.authors.some((author) => author.toLowerCase().includes(keyword)) ||
-        group.publishers.some((publisher) => publisher.toLowerCase().includes(keyword));
+        normalizeText(group.title).includes(keyword) ||
+        group.authors.some((author) => normalizeText(author).includes(keyword)) ||
+        group.publishers.some((publisher) => normalizeText(publisher).includes(keyword));
       return matchesFilter && matchesQuery;
     });
 
@@ -325,9 +336,7 @@ export default function HomeScreen() {
           left.title.localeCompare(right.title)
         );
       }
-      if (seriesSort === 'unread') {
-        return right.unreadCount - left.unreadCount || left.title.localeCompare(right.title);
-      }
+      if (seriesSort === 'unread') return right.unreadCount - left.unreadCount || left.title.localeCompare(right.title);
       if (seriesSort === 'completion') {
         return (
           (seriesStats.get(normalizeSeriesKey(right.title))?.completionRate ?? 100) -
@@ -336,105 +345,81 @@ export default function HomeScreen() {
         );
       }
       if (seriesSort === 'favorite') {
-        const favoriteDifference =
+        return (
           Number(favoriteSeriesKeySet.has(normalizeSeriesKey(right.title))) -
-          Number(favoriteSeriesKeySet.has(normalizeSeriesKey(left.title)));
-        return favoriteDifference || left.title.localeCompare(right.title);
+            Number(favoriteSeriesKeySet.has(normalizeSeriesKey(left.title))) ||
+          left.title.localeCompare(right.title)
+        );
       }
       if (seriesSort === 'author') {
-        return (
-          (left.authors[0] ?? '\uffff').localeCompare(right.authors[0] ?? '\uffff') ||
-          left.title.localeCompare(right.title)
-        );
+        return (left.authors[0] ?? '\uffff').localeCompare(right.authors[0] ?? '\uffff') || left.title.localeCompare(right.title);
       }
       if (seriesSort === 'publisher') {
-        return (
-          (left.publishers[0] ?? '\uffff').localeCompare(right.publishers[0] ?? '\uffff') ||
-          left.title.localeCompare(right.title)
-        );
+        return (left.publishers[0] ?? '\uffff').localeCompare(right.publishers[0] ?? '\uffff') || left.title.localeCompare(right.title);
       }
       return left.title.localeCompare(right.title);
     });
-  }, [favoriteSeriesKeySet, filters, query, seriesGroups, seriesSort, seriesStats]);
+  }, [favoriteSeriesKeySet, filters, publicationCache, query, seriesGroups, seriesSort, seriesStats]);
+
   const visibleBooks = useMemo(() => {
     const activeFilters = getActiveFilters(filters);
     const metadataFilters = getSelectedMetadataFilters(filters);
     const statusFilters = activeFilters.filter((filter): filter is ReadingStatus =>
       readingFilters.includes(filter as ReadingStatus),
     );
+    const keyword = normalizeText(query);
     const filtered = books.filter((book) => {
-        const matchesFilter =
-          (statusFilters.length === 0 || statusFilters.includes(book.status)) &&
-          (!activeFilters.includes('missing') ||
-            (seriesStats.get(normalizeSeriesKey(book.seriesTitle))?.missingVolumes.length ?? 0) > 0) &&
-          (!activeFilters.includes('favorite') ||
-            favoriteSeriesKeySet.has(normalizeSeriesKey(book.seriesTitle))) &&
-          (metadataFilters.authors.length === 0 ||
-            (book.author ? metadataFilters.authors.includes(book.author) : false)) &&
-          (metadataFilters.publishers.length === 0 ||
-            (book.publisher ? metadataFilters.publishers.includes(book.publisher) : false));
-        const keyword = query.toLowerCase();
-        const matchesQuery =
-          book.title.toLowerCase().includes(keyword) ||
-          book.seriesTitle.toLowerCase().includes(keyword) ||
-          (book.author?.toLowerCase().includes(keyword) ?? false) ||
-          (book.publisher?.toLowerCase().includes(keyword) ?? false);
-        return matchesFilter && matchesQuery;
-      });
+      const seriesKey = normalizeSeriesKey(book.seriesTitle);
+      const publicationInfo = publicationCache[seriesKey];
+      const matchesFilter =
+        (statusFilters.length === 0 || statusFilters.includes(book.status)) &&
+        (!activeFilters.includes('missing') || (seriesStats.get(seriesKey)?.missingVolumes.length ?? 0) > 0) &&
+        (!activeFilters.includes('favorite') || favoriteSeriesKeySet.has(seriesKey)) &&
+        (!activeFilters.includes('completed') || publicationInfo?.isCompleted === true) &&
+        (!activeFilters.includes('ongoing') || publicationInfo?.isCompleted !== true) &&
+        (metadataFilters.authors.length === 0 || (book.author ? metadataFilters.authors.includes(book.author) : false)) &&
+        (metadataFilters.publishers.length === 0 ||
+          (book.publisher ? metadataFilters.publishers.includes(book.publisher) : false));
+      const matchesQuery =
+        normalizeText(book.title).includes(keyword) ||
+        normalizeText(book.seriesTitle).includes(keyword) ||
+        (book.author ? normalizeText(book.author).includes(keyword) : false) ||
+        (book.publisher ? normalizeText(book.publisher).includes(keyword) : false);
+      return matchesFilter && matchesQuery;
+    });
 
     return filtered.sort((left, right) => {
       if (bookSort === 'title') return left.title.localeCompare(right.title);
       if (bookSort === 'series') {
-        return (
-          left.seriesTitle.localeCompare(right.seriesTitle) ||
-          (left.volumeNumber ?? Number.MAX_SAFE_INTEGER) -
-            (right.volumeNumber ?? Number.MAX_SAFE_INTEGER)
-        );
+        return left.seriesTitle.localeCompare(right.seriesTitle) || (left.volumeNumber ?? 9999) - (right.volumeNumber ?? 9999);
       }
       if (bookSort === 'volume') {
-        return (
-          (left.volumeNumber ?? Number.MAX_SAFE_INTEGER) -
-            (right.volumeNumber ?? Number.MAX_SAFE_INTEGER) ||
-          left.seriesTitle.localeCompare(right.seriesTitle)
-        );
+        return (left.volumeNumber ?? 9999) - (right.volumeNumber ?? 9999) || left.seriesTitle.localeCompare(right.seriesTitle);
       }
       if (bookSort === 'status') {
-        return (
-          readingStatusOrder[left.status] - readingStatusOrder[right.status] ||
-          left.title.localeCompare(right.title)
-        );
+        return readingStatusOrder[left.status] - readingStatusOrder[right.status] || left.title.localeCompare(right.title);
       }
       if (bookSort === 'favorite') {
-        const favoriteDifference =
+        return (
           Number(favoriteSeriesKeySet.has(normalizeSeriesKey(right.seriesTitle))) -
-          Number(favoriteSeriesKeySet.has(normalizeSeriesKey(left.seriesTitle)));
-        return favoriteDifference || right.createdAt.localeCompare(left.createdAt);
-      }
-      if (bookSort === 'author') {
-        return (
-          (left.author ?? '\uffff').localeCompare(right.author ?? '\uffff') ||
-          left.title.localeCompare(right.title)
+            Number(favoriteSeriesKeySet.has(normalizeSeriesKey(left.seriesTitle))) ||
+          right.createdAt.localeCompare(left.createdAt)
         );
       }
-      if (bookSort === 'publisher') {
-        return (
-          (left.publisher ?? '\uffff').localeCompare(right.publisher ?? '\uffff') ||
-          left.title.localeCompare(right.title)
-        );
-      }
+      if (bookSort === 'author') return (left.author ?? '\uffff').localeCompare(right.author ?? '\uffff') || left.title.localeCompare(right.title);
+      if (bookSort === 'publisher') return (left.publisher ?? '\uffff').localeCompare(right.publisher ?? '\uffff') || left.title.localeCompare(right.title);
       return right.createdAt.localeCompare(left.createdAt);
     });
-  }, [bookSort, books, favoriteSeriesKeySet, filters, query, seriesStats]);
-  const listVersion = `${books.length}-${seriesGroups.length}-${filters.join('|')}-${query}`;
+  }, [bookSort, books, favoriteSeriesKeySet, filters, publicationCache, query, seriesStats]);
+
   const selectedMetadataFilters = getSelectedMetadataFilters(filters);
   const selectedFilterLabel = useMemo(() => {
     const activeFilters = getActiveFilters(filters);
     if (activeFilters.length === 0) return 'すべて';
-
     const labels = activeFilters
       .map((filter) => {
         const metadataFilter = getMetadataFilter(filter);
-        if (metadataFilter?.field === 'author') return `著者:${metadataFilter.value}`;
+        if (metadataFilter?.field === 'author') return `作者:${metadataFilter.value}`;
         if (metadataFilter?.field === 'publisher') return `出版社:${metadataFilter.value}`;
         return filterOptions.find((option) => option.value === filter)?.label;
       })
@@ -445,6 +430,7 @@ export default function HomeScreen() {
     viewMode === 'series'
       ? seriesSortOptions.find((option) => option.value === seriesSort)?.label ?? '名前順'
       : bookSortOptions.find((option) => option.value === bookSort)?.label ?? '最近追加';
+  const listVersion = `${books.length}-${seriesGroups.length}-${filters.join('|')}-${query}`;
 
   const setToolbarVisible = useCallback(
     (visible: boolean) => {
@@ -476,21 +462,18 @@ export default function HomeScreen() {
       const nextY = Math.max(0, event.nativeEvent.contentOffset.y);
       const delta = nextY - lastScrollYRef.current;
       lastScrollYRef.current = nextY;
-
       if (nextY < 8) {
         directionDistanceRef.current = 0;
         setToolbarVisible(true);
         return;
       }
       if (Math.abs(delta) < 1) return;
-
       const direction: 1 | -1 = delta > 0 ? 1 : -1;
       if (lastDirectionRef.current !== direction) {
         lastDirectionRef.current = direction;
         directionDistanceRef.current = 0;
       }
       directionDistanceRef.current += Math.abs(delta);
-
       if (directionDistanceRef.current >= 14) {
         setToolbarVisible(direction < 0);
         directionDistanceRef.current = 0;
@@ -506,27 +489,16 @@ export default function HomeScreen() {
     setToolbarVisible(true);
   };
 
-  const closeMenu = () => setOpenMenu(null);
-  const listTopPadding = toolbarHeight + 10;
-
   const refreshSeriesPublication = async (seriesTitle: string, ownedLatestVolume?: number) => {
     if (refreshingSeriesTitle) return;
     setRefreshingSeriesTitle(seriesTitle);
-
     try {
       const result = await lookupLatestSeriesPublication(seriesTitle);
       if (!result) {
-        Alert.alert(
-          '刊行巻数を取得できませんでした',
-          '書籍APIに同じシリーズの巻数情報が見つかりませんでした。',
-        );
+        Alert.alert('刊行巻数を取得できませんでした', '同じシリーズの巻数情報が見つかりませんでした。');
         return;
       }
-
-      const safeResult = {
-        ...result,
-        latestVolume: Math.max(result.latestVolume, ownedLatestVolume ?? 0),
-      };
+      const safeResult = { ...result, latestVolume: Math.max(result.latestVolume, ownedLatestVolume ?? 0) };
       const cacheKey = normalizeSeriesKey(seriesTitle);
       setPublicationCache((current) => {
         const next = { ...current, [cacheKey]: safeResult };
@@ -536,9 +508,7 @@ export default function HomeScreen() {
     } catch (refreshError) {
       Alert.alert(
         '更新できませんでした',
-        refreshError instanceof Error
-          ? refreshError.message
-          : '通信状態を確認して、もう一度お試しください。',
+        refreshError instanceof Error ? refreshError.message : '通信状態を確認して、もう一度お試しください。',
       );
     } finally {
       setRefreshingSeriesTitle(null);
@@ -547,10 +517,7 @@ export default function HomeScreen() {
 
   const toggleSeriesNotification = async (group: SeriesGroup) => {
     if (!newReleaseNotifications) {
-      Alert.alert(
-        '新刊通知がOFFです',
-        '設定画面で新刊通知をONにすると、シリーズごとに通知対象を選べます。',
-      );
+      Alert.alert('新刊通知がOFFです', '設定画面で新刊通知をONにすると、シリーズごとに通知対象を選べます。');
       return;
     }
     if (!user) {
@@ -564,31 +531,23 @@ export default function HomeScreen() {
     setNotificationSeriesKeys((current) =>
       enabled ? [...new Set([...current, seriesKey])] : current.filter((key) => key !== seriesKey),
     );
-
     try {
-      await setNewReleaseSeriesSubscription(
-        user.id,
-        {
-          latestVolume: group.latestVolume,
-          seriesKey,
-          seriesTitle: group.title,
-        },
-        enabled,
-      );
+      await setNewReleaseSeriesSubscription(user.id, { latestVolume: group.latestVolume, seriesKey, seriesTitle: group.title }, enabled);
     } catch (notificationError) {
       setNotificationSeriesKeys((current) =>
         enabled ? current.filter((key) => key !== seriesKey) : [...new Set([...current, seriesKey])],
       );
       Alert.alert(
         'シリーズ通知を更新できませんでした',
-        notificationError instanceof Error
-          ? notificationError.message
-          : '通信状態を確認して、もう一度お試しください。',
+        notificationError instanceof Error ? notificationError.message : '通信状態を確認してもう一度お試しください。',
       );
     } finally {
       setUpdatingNotificationSeriesKey(null);
     }
   };
+
+  const closeMenu = () => setOpenMenu(null);
+  const listTopPadding = toolbarHeight + 10;
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
@@ -620,26 +579,22 @@ export default function HomeScreen() {
           ref={seriesListRef}
           style={styles.list}
           data={visibleGroups}
-          extraData={`${listVersion}-${refreshingSeriesTitle}-${showPublishedLatestVolume}-${notificationSeriesKeys.join(',')}-${updatingNotificationSeriesKey}`}
+          extraData={`${listVersion}-${favoriteSeriesKeys.join(',')}-${refreshingSeriesTitle}-${showPublishedLatestVolume}-${notificationSeriesKeys.join(',')}-${updatingNotificationSeriesKey}`}
           keyExtractor={(item) => item.id}
           contentContainerStyle={[styles.grid, { paddingTop: listTopPadding }]}
           showsVerticalScrollIndicator={false}
           onScroll={handleScroll}
           scrollEventThrottle={16}
           renderItem={({ item }) => {
-            const stats = seriesStats.get(item.title);
             const cacheKey = normalizeSeriesKey(item.title);
+            const stats = seriesStats.get(cacheKey);
             const publicationInfo = publicationCache[cacheKey];
             return (
               <SeriesCard
                 key={item.id}
                 group={item}
-                missingVolumes={stats?.missingVolumes ?? []}
-                unownedVolumes={
-                  showPublishedLatestVolume
-                    ? getTrailingUnownedVolumes(item.latestVolume, publicationInfo?.latestVolume)
-                    : []
-                }
+                missingVolumes={stats?.internalMissingVolumes ?? []}
+                unownedVolumes={showPublishedLatestVolume ? stats?.trailingUnownedVolumes ?? [] : []}
                 completionRate={stats?.completionRate ?? 100}
                 favorite={favoriteSeriesKeySet.has(cacheKey)}
                 showPublishedLatestVolume={showPublishedLatestVolume}
@@ -655,11 +610,7 @@ export default function HomeScreen() {
               />
             );
           }}
-          ListEmptyComponent={
-            !loading ? (
-              <EmptyLibraryState requiresAuth={requiresAuth} libraryIsEmpty={books.length === 0} />
-            ) : null
-          }
+          ListEmptyComponent={!loading ? <EmptyLibraryState requiresAuth={requiresAuth} libraryIsEmpty={books.length === 0} /> : null}
         />
       ) : (
         <FlatList
@@ -673,11 +624,7 @@ export default function HomeScreen() {
           onScroll={handleScroll}
           scrollEventThrottle={16}
           renderItem={({ item }) => <BookRow book={item} />}
-          ListEmptyComponent={
-            !loading ? (
-              <EmptyLibraryState requiresAuth={requiresAuth} libraryIsEmpty={books.length === 0} />
-            ) : null
-          }
+          ListEmptyComponent={!loading ? <EmptyLibraryState requiresAuth={requiresAuth} libraryIsEmpty={books.length === 0} /> : null}
         />
       )}
 
@@ -700,56 +647,39 @@ export default function HomeScreen() {
             : openMenu === 'author'
               ? [{ label: '作者指定を解除', value: 'all' }, ...metadataFilterOptions.authors]
               : openMenu === 'publisher'
-                ? [
-                    { label: '出版社指定を解除', value: 'all' },
-                    ...metadataFilterOptions.publishers,
-                  ]
+                ? [{ label: '出版社指定を解除', value: 'all' }, ...metadataFilterOptions.publishers]
                 : filterCategoryOptions
         }
         multiple={openMenu !== 'sort'}
-        selectedValue={
-          openMenu === 'sort'
-            ? viewMode === 'series'
-              ? seriesSort
-              : bookSort
-            : undefined
-        }
+        selectedValue={openMenu === 'sort' ? (viewMode === 'series' ? seriesSort : bookSort) : undefined}
         selectedValues={
           openMenu === 'sort'
             ? undefined
             : openMenu === 'author'
               ? selectedMetadataFilters.authors.length > 0
-                ? selectedMetadataFilters.authors.map(
-                    (author) => `author:${encodeURIComponent(author)}`,
-                  )
+                ? selectedMetadataFilters.authors.map((author) => `author:${encodeURIComponent(author)}`)
                 : ['all']
               : openMenu === 'publisher'
                 ? selectedMetadataFilters.publishers.length > 0
-                  ? selectedMetadataFilters.publishers.map(
-                      (publisher) => `publisher:${encodeURIComponent(publisher)}`,
-                    )
+                  ? selectedMetadataFilters.publishers.map((publisher) => `publisher:${encodeURIComponent(publisher)}`)
                   : ['all']
                 : [
-                    ...(getActiveFilters(filters).filter(
+                    ...getActiveFilters(filters).filter(
                       (filter) => !filter.startsWith('author:') && !filter.startsWith('publisher:'),
-                    )),
+                    ),
                     ...(selectedMetadataFilters.authors.length > 0 ? ['select-author'] : []),
                     ...(selectedMetadataFilters.publishers.length > 0 ? ['select-publisher'] : []),
                   ].length > 0
                   ? [
-                      ...(getActiveFilters(filters).filter(
+                      ...getActiveFilters(filters).filter(
                         (filter) => !filter.startsWith('author:') && !filter.startsWith('publisher:'),
-                      )),
+                      ),
                       ...(selectedMetadataFilters.authors.length > 0 ? ['select-author'] : []),
                       ...(selectedMetadataFilters.publishers.length > 0 ? ['select-publisher'] : []),
                     ]
                   : ['all']
         }
-        onBack={
-          openMenu === 'author' || openMenu === 'publisher'
-            ? () => setOpenMenu('filter')
-            : undefined
-        }
+        onBack={openMenu === 'author' || openMenu === 'publisher' ? () => setOpenMenu('filter') : undefined}
         onApply={closeMenu}
         onSelect={(value) => {
           if (openMenu === 'sort') {
@@ -758,10 +688,8 @@ export default function HomeScreen() {
             closeMenu();
           } else if (openMenu === 'filter' && value === 'select-author') {
             setOpenMenu('author');
-            return;
           } else if (openMenu === 'filter' && value === 'select-publisher') {
             setOpenMenu('publisher');
-            return;
           } else if (openMenu === 'author' && value === 'all') {
             setFilters((current) => removeFilterGroup(current, 'author:'));
           } else if (openMenu === 'publisher' && value === 'all') {

@@ -47,12 +47,7 @@ export function OptionSheet({
         >
           <View style={styles.header}>
             {onBack && (
-              <Pressable
-                accessibilityLabel="表示条件へ戻る"
-                hitSlop={8}
-                onPress={onBack}
-                style={styles.backButton}
-              >
+              <Pressable accessibilityLabel="表示条件へ戻る" hitSlop={8} onPress={onBack} style={styles.backButton}>
                 <Ionicons color={colors.text} name="chevron-back" size={22} />
               </Pressable>
             )}
@@ -75,9 +70,7 @@ export function OptionSheet({
                         selected && { backgroundColor: colors.text },
                       ]}
                     >
-                      <Text style={[styles.checkmark, { color: colors.background }]}>
-                        {selected ? '✓' : ''}
-                      </Text>
+                      <Text style={[styles.checkmark, { color: colors.background }]}>{selected ? '✓' : ''}</Text>
                     </View>
                   ) : (
                     <View style={styles.listIndicator}>
@@ -91,10 +84,7 @@ export function OptionSheet({
           </ScrollView>
           {multiple && (
             <View style={[styles.footer, { borderTopColor: colors.border }]}>
-              <Pressable
-                onPress={onApply ?? onClose}
-                style={[styles.applyButton, { backgroundColor: colors.text }]}
-              >
+              <Pressable onPress={onApply ?? onClose} style={[styles.applyButton, { backgroundColor: colors.text }]}>
                 <Text style={[styles.applyText, { color: colors.background }]}>適用</Text>
               </Pressable>
             </View>
@@ -115,8 +105,8 @@ const styles = StyleSheet.create({
   },
   sheet: {
     borderRadius: 8,
-    maxWidth: 360,
     maxHeight: '78%',
+    maxWidth: 360,
     overflow: 'hidden',
     paddingHorizontal: 16,
     paddingTop: 16,

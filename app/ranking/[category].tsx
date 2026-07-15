@@ -20,7 +20,7 @@ const PAGE_SIZE = 10;
 
 function parseCategory(value: string | string[] | undefined): RankingCategory {
   const category = Array.isArray(value) ? value[0] : value;
-  if (category === 'wanted' || category === 'owned' || category === 'personal') return category;
+  if (category === 'wanted' || category === 'owned' || category === 'favorite' || category === 'personal') return category;
   return 'overall';
 }
 
@@ -36,7 +36,10 @@ export default function RankingCategoryScreen() {
   const [page, setPage] = useState(1);
   const label = rankingCategoryLabels[category];
 
-  const rows = useMemo(() => buildRankingRows(category, globalRows, items), [category, globalRows, items]);
+  const rows = useMemo(
+    () => buildRankingRows(category, globalRows, items),
+    [category, globalRows, items],
+  );
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageRows = useMemo(
     () => rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
@@ -121,7 +124,7 @@ export default function RankingCategoryScreen() {
                 added={addedTitles.has(normalizeRankingTitle(row.title))}
                 index={(page - 1) * PAGE_SIZE + index}
                 onAddWishlist={
-                  category === 'personal'
+                  category === 'personal' || category === 'favorite'
                     ? undefined
                     : () =>
                         addItem({

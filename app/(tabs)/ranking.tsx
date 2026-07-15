@@ -32,7 +32,6 @@ export default function RankingScreen() {
   });
   const addedTitles = useMemo(() => new Set(items.map((item) => normalizeRankingTitle(item.title))), [items]);
   useScrollToTop(tabScrollToTopRef);
-
   const sections = useMemo(
     () =>
       rankingCategories.map((category) => ({
@@ -98,7 +97,7 @@ export default function RankingScreen() {
           description={section.description}
           expandedKey={expandedKey}
           onAddWishlist={
-            section.category === 'personal'
+            section.category === 'personal' || section.category === 'favorite'
               ? undefined
               : (row) =>
                   addItem({

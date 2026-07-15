@@ -27,10 +27,19 @@ export function buildSeriesGroups(books: Book[]): SeriesGroup[] {
 
   return [...bySeries.entries()]
     .map(([seriesKey, groupedBooks]) => {
-      const sortedBooks = [...groupedBooks].sort(
+      const latestSortedBooks = [...groupedBooks].sort(
         (left, right) => (right.volumeNumber ?? 0) - (left.volumeNumber ?? 0),
       );
-      const representative = sortedBooks.find((book) => !!book.thumbnailUrl) ?? sortedBooks[0];
+      const earliestSortedBooks = [...groupedBooks].sort(
+        (left, right) =>
+          (left.volumeNumber ?? Number.MAX_SAFE_INTEGER) -
+            (right.volumeNumber ?? Number.MAX_SAFE_INTEGER) ||
+          left.createdAt.localeCompare(right.createdAt),
+      );
+      const representative =
+        earliestSortedBooks.find((book) => !!book.thumbnailUrl) ??
+        earliestSortedBooks[0] ??
+        latestSortedBooks[0];
       const title = representative.seriesTitle;
 
       return {
@@ -45,7 +54,7 @@ export function buildSeriesGroups(books: Book[]): SeriesGroup[] {
         publishers: [
           ...new Set(groupedBooks.map((book) => book.publisher).filter((value): value is string => !!value)),
         ],
-        latestVolume: sortedBooks[0]?.volumeNumber,
+        latestVolume: latestSortedBooks[0]?.volumeNumber,
         latestAddedAt: groupedBooks.reduce(
           (latest, book) => (book.createdAt > latest ? book.createdAt : latest),
           groupedBooks[0]?.createdAt ?? '',

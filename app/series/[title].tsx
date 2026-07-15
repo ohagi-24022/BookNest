@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as WebBrowser from 'expo-web-browser';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
@@ -14,16 +15,19 @@ import {
 } from 'react-native';
 
 import { BookCover } from '../../src/components/BookCover';
-import { buildPurchaseUrl, lookupBookByTitle } from '../../src/lib/bookApis';
+import { buildPurchaseUrl, lookupBookByTitle, SeriesPublicationInfo } from '../../src/lib/bookApis';
 import { migrateNewReleaseSeriesSubscription } from '../../src/lib/newReleaseNotifications';
+import { normalizeSeriesKey } from '../../src/lib/series';
 import { useAppSettings } from '../../src/store/AppSettingsContext';
 import { useAuth } from '../../src/store/AuthContext';
 import { useLibrary } from '../../src/store/LibraryContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 import { useWishlist } from '../../src/store/WishlistContext';
-import { Book, ReadingStatus, ShelfItem } from '../../src/types';
+import { Book, MissingBook, ReadingStatus, ShelfItem } from '../../src/types';
 
 const PAGE_SIZE = 10;
+const SERIES_PUBLICATION_STORAGE_KEY = 'booknest.series-publication.v1';
+
 const statusLabels: Record<ReadingStatus, string> = {
   unread: '未読',
   reading: '読書中',
@@ -43,12 +47,8 @@ export default function SeriesScreen() {
   const { addBook, getSeriesItems, bulkUpdateStatus, updateBook, renameSeries, deleteBook, repairBookMetadata } =
     useLibrary();
   const { addItem: addWishlistItem } = useWishlist();
-  const {
-    isFavoriteSeries,
-    migrateFavoriteSeries,
-    openExternalPurchaseLinks,
-    toggleFavoriteSeries,
-  } = useAppSettings();
+  const { isFavoriteSeries, migrateFavoriteSeries, openExternalPurchaseLinks, showPublishedLatestVolume, toggleFavoriteSeries } =
+    useAppSettings();
   const { colors } = useAppTheme();
   const listRef = useRef<FlatList<ShelfItem>>(null);
   const shouldKeepBottomRef = useRef(false);
@@ -60,14 +60,56 @@ export default function SeriesScreen() {
   const [draftVolume, setDraftVolume] = useState('');
   const [renameOpen, setRenameOpen] = useState(false);
   const [draftSeriesTitle, setDraftSeriesTitle] = useState(seriesTitle);
+  const [publicationInfo, setPublicationInfo] = useState<SeriesPublicationInfo | null>(null);
 
-  const items = useMemo(() => getSeriesItems(seriesTitle), [getSeriesItems, seriesTitle]);
+  const baseItems = useMemo(() => getSeriesItems(seriesTitle), [getSeriesItems, seriesTitle]);
+  const items = useMemo(() => {
+    if (!showPublishedLatestVolume || !publicationInfo?.latestVolume) return baseItems;
+
+    const existingVolumes = new Set(
+      baseItems
+        .map((item) => item.volumeNumber)
+        .filter((volume): volume is number => typeof volume === 'number'),
+    );
+    const ownedVolumes = baseItems
+      .filter(isOwnedBook)
+      .map((item) => item.volumeNumber)
+      .filter((volume): volume is number => typeof volume === 'number');
+    const ownedLatestVolume = ownedVolumes.length > 0 ? Math.max(...ownedVolumes) : 0;
+    const createdAt = new Date().toISOString();
+    const trailingMissing: MissingBook[] = [];
+
+    for (let volume = ownedLatestVolume + 1; volume <= publicationInfo.latestVolume; volume += 1) {
+      if (existingVolumes.has(volume)) continue;
+      trailingMissing.push({
+        id: `missing-published-${seriesTitle}-${volume}`,
+        userId: user?.id ?? 'local-user',
+        title: `${seriesTitle} ${volume}`,
+        seriesTitle,
+        volumeNumber: volume,
+        status: 'missing',
+        createdAt,
+        isMissing: true,
+      });
+    }
+
+    return [...baseItems, ...trailingMissing].sort(
+      (left, right) => (left.volumeNumber ?? 0) - (right.volumeNumber ?? 0),
+    );
+  }, [baseItems, publicationInfo, seriesTitle, showPublishedLatestVolume, user?.id]);
   const pageCount = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
-  const pageItems = useMemo(
-    () => items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
-    [items, page],
-  );
+  const pageItems = useMemo(() => items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [items, page]);
   const ownedItems = useMemo(() => items.filter(isOwnedBook), [items]);
+  const missingItems = useMemo(() => items.filter((item) => item.isMissing), [items]);
+  const readCount = ownedItems.filter((item) => item.status === 'read').length;
+  const readingCount = ownedItems.filter((item) => item.status === 'reading').length;
+  const unreadCount = ownedItems.filter((item) => item.status === 'unread').length;
+  const readPercent = ownedItems.length > 0 ? Math.round((readCount / ownedItems.length) * 100) : 0;
+  const pageVolumes = pageItems
+    .map((item) => item.volumeNumber)
+    .filter((volume): volume is number => typeof volume === 'number');
+  const pageRangeLabel =
+    pageVolumes.length > 0 ? `${Math.min(...pageVolumes)}〜${Math.max(...pageVolumes)}巻` : `${page}ページ目`;
   const selectedCount = selectedIds.length;
   const allSelected = ownedItems.length > 0 && selectedCount === ownedItems.length;
   const favorite = isFavoriteSeries(seriesTitle);
@@ -90,10 +132,31 @@ export default function SeriesScreen() {
         </Pressable>
       ),
     });
-  }, [colors.muted, favorite, navigation, seriesTitle, toggleFavoriteSeries]);
+  }, [colors.muted, colors.primary, favorite, navigation, seriesTitle, toggleFavoriteSeries]);
 
   useEffect(() => {
     setPage(1);
+    setSelectedIds([]);
+  }, [seriesTitle]);
+
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(SERIES_PUBLICATION_STORAGE_KEY)
+      .then((storedCache) => {
+        if (cancelled || !storedCache) {
+          if (!cancelled) setPublicationInfo(null);
+          return;
+        }
+        const cache = JSON.parse(storedCache) as Record<string, SeriesPublicationInfo>;
+        setPublicationInfo(cache[normalizeSeriesKey(seriesTitle)] ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setPublicationInfo(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [seriesTitle]);
 
   useEffect(() => {
@@ -106,10 +169,7 @@ export default function SeriesScreen() {
   };
 
   const toggleSelected = (item: ShelfItem) => {
-    if (!isOwnedBook(item)) {
-      return;
-    }
-
+    if (!isOwnedBook(item)) return;
     setSelectedIds((current) =>
       current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id],
     );
@@ -191,7 +251,7 @@ export default function SeriesScreen() {
   const submitSeriesRename = async () => {
     try {
       const nextTitle = draftSeriesTitle.trim();
-      const updatedCount = await renameSeries(seriesTitle, draftSeriesTitle);
+      const updatedCount = await renameSeries(seriesTitle, nextTitle);
       migrateFavoriteSeries(seriesTitle, nextTitle);
       if (user) {
         const latestVolume = ownedItems
@@ -208,10 +268,7 @@ export default function SeriesScreen() {
         }
       }
       setRenameOpen(false);
-      Alert.alert(
-        'シリーズ名を更新しました',
-        `${updatedCount}冊を「${nextTitle}」へ移しました。`,
-      );
+      Alert.alert('シリーズ名を更新しました', `${updatedCount}冊を「${nextTitle}」へ移しました。`);
       router.replace(`/series/${encodeURIComponent(nextTitle)}`);
     } catch (error) {
       Alert.alert('BookNest', error instanceof Error ? error.message : 'シリーズ名の更新に失敗しました。');
@@ -291,55 +348,50 @@ export default function SeriesScreen() {
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
       <View style={[styles.bulkBar, { borderBottomColor: colors.border }]}>
-        <Text style={[styles.bulkText, { color: colors.muted }]}>{selectedCount} 冊選択中</Text>
+        <Text style={[styles.bulkText, { color: colors.muted }]}>{selectedCount}冊選択中</Text>
         <Pressable
+          accessibilityLabel="シリーズ名を変更"
           onPress={() => {
             setDraftSeriesTitle(seriesTitle);
             setRenameOpen((current) => !current);
           }}
-          style={[styles.bulkButton, { borderColor: colors.border, borderWidth: 1 }]}
+          style={[styles.iconActionButton, { borderColor: colors.border }]}
         >
-          <Text style={[styles.bulkButtonText, { color: colors.text }]}>シリーズ名変更</Text>
+          <Ionicons color={colors.text} name="create-outline" size={19} />
         </Pressable>
         <Pressable
+          accessibilityLabel={allSelected ? '選択をすべて解除' : '全巻を選択'}
           disabled={ownedItems.length === 0}
           onPress={toggleAllSelected}
-          style={[styles.bulkButton, { borderColor: colors.border, borderWidth: 1 }, ownedItems.length === 0 && styles.disabledButton]}
+          style={[styles.iconActionButton, { borderColor: colors.border }, ownedItems.length === 0 && styles.disabledButton]}
         >
-          <Text style={[styles.bulkButtonText, { color: colors.text }]}>
-            {allSelected ? '全解除' : '全選択'}
-          </Text>
+          <Ionicons color={colors.text} name={allSelected ? 'close-circle-outline' : 'checkbox-outline'} size={19} />
         </Pressable>
       </View>
+
       <View style={[styles.statusSlot, { borderBottomColor: colors.border }]}>
         {selectedCount > 0 ? (
-          <View
-            style={[
-              styles.statusBar,
-              {
-                backgroundColor: colors.surface,
-                borderColor: colors.border,
-                shadowColor: '#000000',
-              },
-            ]}
-          >
+          <View style={[styles.statusBar, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Pressable
+              accessibilityLabel="選択した本を未読にする"
               onPress={() => updateSelected('unread')}
-              style={[styles.statusButton, { borderColor: colors.border }]}
+              style={[styles.statusTextButton, { borderColor: colors.border }]}
             >
-              <Text style={[styles.statusButtonText, { color: colors.text }]}>未読にする</Text>
+              <Text style={[styles.statusTextButtonLabel, { color: colors.text }]}>未読にする</Text>
             </Pressable>
             <Pressable
+              accessibilityLabel="選択した本を読書中にする"
               onPress={() => updateSelected('reading')}
-              style={[styles.statusButton, { borderColor: colors.border }]}
+              style={[styles.statusTextButton, { borderColor: colors.border }]}
             >
-              <Text style={[styles.statusButtonText, { color: colors.text }]}>読書中にする</Text>
+              <Text style={[styles.statusTextButtonLabel, { color: colors.text }]}>読書中にする</Text>
             </Pressable>
             <Pressable
+              accessibilityLabel="選択した本を読了にする"
               onPress={() => updateSelected('read')}
-              style={[styles.statusButton, { backgroundColor: colors.success, borderColor: colors.success }]}
+              style={[styles.statusTextButton, { backgroundColor: colors.success, borderColor: colors.success }]}
             >
-              <Text style={styles.statusButtonText}>読了にする</Text>
+              <Text style={[styles.statusTextButtonLabel, { color: '#ffffff' }]}>読了にする</Text>
             </Pressable>
           </View>
         ) : (
@@ -348,6 +400,7 @@ export default function SeriesScreen() {
           </Text>
         )}
       </View>
+
       {renameOpen && (
         <View style={[styles.renameBox, { borderBottomColor: colors.border }]}>
           <Text style={[styles.rowTitle, { color: colors.text }]}>シリーズ名の一括変更</Text>
@@ -363,10 +416,11 @@ export default function SeriesScreen() {
               style={[styles.renameInput, { backgroundColor: colors.input, color: colors.text }]}
             />
             <Pressable
+              accessibilityLabel="シリーズ名の変更を反映"
               onPress={() => void submitSeriesRename()}
-              style={[styles.saveButton, styles.renameSaveButton, { backgroundColor: colors.text }]}
+              style={[styles.saveIconButton, { backgroundColor: colors.text }]}
             >
-              <Text style={[styles.saveButtonText, { color: colors.background }]}>反映</Text>
+              <Ionicons color={colors.background} name="checkmark" size={20} />
             </Pressable>
           </View>
         </View>
@@ -385,19 +439,22 @@ export default function SeriesScreen() {
           });
         }}
         ListHeaderComponent={
-          <Pagination
-            page={page}
-            pageCount={pageCount}
-            onChange={setPage}
-          />
+          <View>
+            <SeriesOverview
+              missingCount={missingItems.length}
+              ownedCount={ownedItems.length}
+              pageRangeLabel={pageRangeLabel}
+              readCount={readCount}
+              readingCount={readingCount}
+              readPercent={readPercent}
+              unreadCount={unreadCount}
+            />
+            <Pagination page={page} pageCount={pageCount} onChange={setPage} />
+          </View>
         }
         ListFooterComponent={
           <View style={styles.footerPagination}>
-            <Pagination
-              page={page}
-              pageCount={pageCount}
-              onChange={changePageFromBottom}
-            />
+            <Pagination page={page} pageCount={pageCount} onChange={changePageFromBottom} />
           </View>
         }
         renderItem={({ item }) => {
@@ -415,6 +472,7 @@ export default function SeriesScreen() {
               ]}
             >
               <Pressable
+                accessibilityLabel={selected ? `${item.title}の選択を解除` : `${item.title}を選択`}
                 onPress={(event) => {
                   event.stopPropagation();
                   if (missing) void addMissingAsOwned(item);
@@ -424,6 +482,7 @@ export default function SeriesScreen() {
               >
                 <Text style={[styles.checkboxText, { color: colors.text }]}>{selected ? '✓' : missing ? '+' : ''}</Text>
               </Pressable>
+
               <BookCover
                 thumbnailUrl={item.thumbnailUrl}
                 isbn={isOwnedBook(item) ? item.isbn : undefined}
@@ -431,77 +490,72 @@ export default function SeriesScreen() {
                 missing={missing}
                 placeholderText={`No.${item.volumeNumber ?? '-'}`}
               />
+
               <View style={styles.rowBody}>
-                <View>
-                  <Text
-                    style={[styles.bookTitle, { color: missing ? colors.muted : colors.text }]}
-                    numberOfLines={2}
-                  >
-                    {item.title}
+                <Text style={[styles.bookTitle, { color: missing ? colors.muted : colors.text }]} numberOfLines={2}>
+                  {item.title}
+                </Text>
+                <View style={styles.metaRow}>
+                  <Text style={[styles.meta, { color: colors.muted }]}>
+                    {item.volumeNumber ? `${item.volumeNumber}巻` : '巻数なし'}
+                    {missing ? ' / 未所持' : ''}
                   </Text>
-                  <View style={styles.metaRow}>
-                    <Text style={[styles.meta, { color: colors.muted }]}>
-                      {item.volumeNumber ? `${item.volumeNumber}巻` : '巻数なし'}
-                      {missing ? ' / 未所持' : ''}
-                    </Text>
-                    {isOwnedBook(item) && (
-                      <View style={[styles.statusPill, { backgroundColor: colors.elevated }]}>
-                        <Text style={[styles.statusPillText, { color: colors.text }]}>
-                          {statusLabels[item.status]}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                  {isOwnedBook(item) && (item.author || item.publisher) && (
-                    <Text style={[styles.credits, { color: colors.muted }]} numberOfLines={2}>
-                      {[item.author, item.publisher].filter(Boolean).join(' / ')}
-                    </Text>
+                  {isOwnedBook(item) && (
+                    <View style={[styles.statusPill, { backgroundColor: colors.elevated }]}>
+                      <Text style={[styles.statusPillText, { color: colors.text }]}>{statusLabels[item.status]}</Text>
+                    </View>
                   )}
                 </View>
+
+                {isOwnedBook(item) && (item.author || item.publisher) && (
+                  <Text style={[styles.credits, { color: colors.muted }]} numberOfLines={2}>
+                    {[item.author, item.publisher].filter(Boolean).join(' / ')}
+                  </Text>
+                )}
+
                 {missing && (
-                  <View style={[styles.actionRow, styles.missingActionRow]}>
+                  <View style={styles.actionRow}>
                     <Pressable
+                      accessibilityLabel={`${item.title}の購入候補を開く`}
                       onPress={(event) => {
                         event.stopPropagation();
                         void openPurchaseCandidates(item);
                       }}
-                      style={[styles.smallButton, styles.missingPrimaryButton, { borderColor: colors.primary }]}
+                      style={[styles.iconActionButton, { borderColor: colors.primary }]}
                     >
-                      <Text style={[styles.smallButtonText, { color: colors.primary }]}>購入候補</Text>
+                      <Ionicons color={colors.primary} name="cart-outline" size={19} />
                     </Pressable>
                     <Pressable
+                      accessibilityLabel={`${item.title}を所持に追加`}
                       disabled={refreshingId === item.id}
                       onPress={(event) => {
                         event.stopPropagation();
                         void addMissingAsOwned(item);
                       }}
                       style={[
-                        styles.smallButton,
-                        styles.missingSecondaryButton,
+                        styles.iconActionButton,
                         { backgroundColor: colors.text, borderColor: colors.text },
                         refreshingId === item.id && styles.disabledButton,
                       ]}
                     >
-                      <Text style={[styles.smallButtonText, { color: colors.background }]}>
-                        {refreshingId === item.id ? '検索中' : '所持に追加'}
-                      </Text>
+                      <Ionicons color={colors.background} name={refreshingId === item.id ? 'hourglass-outline' : 'add'} size={20} />
                     </Pressable>
                     <Pressable
+                      accessibilityLabel={`${item.title}を欲しいリストに追加`}
                       onPress={(event) => {
                         event.stopPropagation();
                         addMissingToWishlist(item);
                       }}
-                      style={[styles.smallButton, styles.missingSecondaryButton, { borderColor: colors.border }]}
+                      style={[styles.textActionButton, { borderColor: colors.border }]}
                     >
-                      <Text style={[styles.smallButtonText, { color: colors.text }]}>欲しいへ</Text>
+                      <Ionicons color={colors.text} name="heart-outline" size={19} />
+                      <Text style={[styles.textActionLabel, { color: colors.text }]}>欲しいへ</Text>
                     </Pressable>
                   </View>
                 )}
+
                 {isOwnedBook(item) && editingId === item.id && (
-                  <Pressable
-                    onPress={(event) => event.stopPropagation()}
-                    style={styles.editBox}
-                  >
+                  <Pressable onPress={(event) => event.stopPropagation()} style={styles.editBox}>
                     <TextInput
                       value={draftSeries}
                       onChangeText={setDraftSeries}
@@ -517,46 +571,48 @@ export default function SeriesScreen() {
                       placeholderTextColor={colors.muted}
                       style={[styles.editInput, { backgroundColor: colors.input, color: colors.text }]}
                     />
-                    <Pressable onPress={() => submitEdit(item)} style={[styles.saveButton, { backgroundColor: colors.text }]}>
-                      <Text style={[styles.saveButtonText, { color: colors.background }]}>保存</Text>
+                    <Pressable
+                      accessibilityLabel={`${item.title}の編集内容を保存`}
+                      onPress={() => submitEdit(item)}
+                      style={[styles.saveIconButton, { backgroundColor: colors.text }]}
+                    >
+                      <Ionicons color={colors.background} name="checkmark" size={20} />
                     </Pressable>
                   </Pressable>
                 )}
+
                 {isOwnedBook(item) && (
                   <View style={styles.actionRow}>
                     <Pressable
+                      accessibilityLabel={`${item.title}の詳細を見る`}
                       onPress={(event) => {
                         event.stopPropagation();
                         router.push(`/book/${encodeURIComponent(item.id)}`);
                       }}
-                      style={[styles.smallButton, { borderColor: colors.primary }]}
+                      style={[styles.iconActionButton, { borderColor: colors.primary }]}
                     >
-                      <Text style={[styles.smallButtonText, { color: colors.primary }]}>詳細を見る</Text>
+                      <Ionicons color={colors.primary} name="information-circle-outline" size={19} />
                     </Pressable>
                     <Pressable
+                      accessibilityLabel={`${item.title}の書籍情報を再取得`}
                       disabled={refreshingId === item.id}
                       onPress={(event) => {
                         event.stopPropagation();
                         refreshMetadata(item);
                       }}
-                      style={[
-                        styles.smallButton,
-                        { borderColor: colors.border },
-                        refreshingId === item.id && styles.disabledButton,
-                      ]}
+                      style={[styles.iconActionButton, { borderColor: colors.border }, refreshingId === item.id && styles.disabledButton]}
                     >
-                      <Text style={[styles.smallButtonText, { color: colors.text }]}>
-                        {refreshingId === item.id ? '再取得中' : '再取得'}
-                      </Text>
+                      <Ionicons color={colors.text} name={refreshingId === item.id ? 'hourglass-outline' : 'refresh'} size={19} />
                     </Pressable>
                     <Pressable
+                      accessibilityLabel={`${item.title}を削除`}
                       onPress={(event) => {
                         event.stopPropagation();
                         confirmDelete(item);
                       }}
-                      style={[styles.smallButton, { borderColor: colors.danger }]}
+                      style={[styles.iconActionButton, { borderColor: colors.danger }]}
                     >
-                      <Text style={[styles.smallButtonText, { color: colors.danger }]}>削除</Text>
+                      <Ionicons color={colors.danger} name="trash-outline" size={19} />
                     </Pressable>
                   </View>
                 )}
@@ -565,6 +621,65 @@ export default function SeriesScreen() {
           );
         }}
       />
+    </View>
+  );
+}
+
+function SeriesOverview({
+  missingCount,
+  ownedCount,
+  pageRangeLabel,
+  readCount,
+  readingCount,
+  readPercent,
+  unreadCount,
+}: {
+  missingCount: number;
+  ownedCount: number;
+  pageRangeLabel: string;
+  readCount: number;
+  readingCount: number;
+  readPercent: number;
+  unreadCount: number;
+}) {
+  const { colors } = useAppTheme();
+  const totalKnown = ownedCount + missingCount;
+
+  return (
+    <View style={[styles.overview, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+      <View style={styles.overviewHeader}>
+        <View>
+          <Text style={[styles.overviewLabel, { color: colors.muted }]}>このページ</Text>
+          <Text style={[styles.overviewTitle, { color: colors.text }]}>{pageRangeLabel}</Text>
+        </View>
+        <View style={[styles.readProgressBadge, { backgroundColor: colors.elevated }]}>
+          <Text style={[styles.readProgressText, { color: colors.text }]}>読了 {readPercent}%</Text>
+        </View>
+      </View>
+
+      <View style={[styles.progressTrack, { backgroundColor: colors.elevated }]}>
+        <View style={[styles.progressFill, { backgroundColor: colors.success, width: `${readPercent}%` }]} />
+      </View>
+
+      <View style={styles.overviewStats}>
+        <OverviewStat label="所持" value={ownedCount} />
+        <OverviewStat label="抜け巻" value={missingCount} danger={missingCount > 0} />
+        <OverviewStat label="表示巻" value={totalKnown} />
+      </View>
+
+      <Text style={[styles.statusSummaryText, { color: colors.muted }]}>
+        未読 {unreadCount} / 読書中 {readingCount} / 読了 {readCount}
+      </Text>
+    </View>
+  );
+}
+
+function OverviewStat({ label, value, danger = false }: { label: string; value: number; danger?: boolean }) {
+  const { colors } = useAppTheme();
+  return (
+    <View style={styles.overviewStat}>
+      <Text style={[styles.overviewStatValue, { color: danger ? colors.danger : colors.text }]}>{value}</Text>
+      <Text style={[styles.overviewStatLabel, { color: colors.muted }]}>{label}</Text>
     </View>
   );
 }
@@ -587,11 +702,7 @@ function Pagination({
         accessibilityLabel="前のページを表示"
         disabled={page === 1}
         onPress={() => onChange(Math.max(1, page - 1))}
-        style={[
-          styles.pageArrowButton,
-          { borderColor: colors.border },
-          page === 1 && styles.disabledButton,
-        ]}
+        style={[styles.pageArrowButton, { borderColor: colors.border }, page === 1 && styles.disabledButton]}
       >
         <Text style={[styles.pageArrowText, { color: colors.text }]}>{'<'}</Text>
       </Pressable>
@@ -605,11 +716,7 @@ function Pagination({
         accessibilityLabel="次のページを表示"
         disabled={page === pageCount}
         onPress={() => onChange(Math.min(pageCount, page + 1))}
-        style={[
-          styles.pageArrowButton,
-          { borderColor: colors.border },
-          page === pageCount && styles.disabledButton,
-        ]}
+        style={[styles.pageArrowButton, { borderColor: colors.border }, page === pageCount && styles.disabledButton]}
       >
         <Text style={[styles.pageArrowText, { color: colors.text }]}>{'>'}</Text>
       </Pressable>
@@ -627,18 +734,31 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   bulkText: { flex: 1, fontSize: 13, fontWeight: '700' },
-  bulkButton: {
+  disabledButton: { opacity: 0.35 },
+  iconActionButton: {
+    alignItems: 'center',
     borderRadius: 8,
+    borderWidth: 1,
+    height: 38,
+    justifyContent: 'center',
+    width: 42,
+  },
+  textActionButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 5,
     height: 38,
     justifyContent: 'center',
     paddingHorizontal: 10,
+    minWidth: 96,
   },
-  disabledButton: { opacity: 0.35 },
-  bulkButtonText: { color: '#ffffff', fontSize: 12, fontWeight: '800' },
+  textActionLabel: { fontSize: 12, fontWeight: '800' },
   statusSlot: {
     borderBottomWidth: 1,
-    minHeight: 58,
     justifyContent: 'center',
+    minHeight: 58,
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
@@ -647,22 +767,22 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    shadowOffset: { height: 3, width: 0 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
   },
-  statusButton: {
+  statusTextButton: {
     alignItems: 'center',
     borderRadius: 8,
     borderWidth: 1,
-    flex: 1,
+    flexGrow: 1,
     height: 36,
     justifyContent: 'center',
+    minWidth: 96,
+    paddingHorizontal: 10,
   },
-  statusButtonText: { color: '#ffffff', fontSize: 12, fontWeight: '800' },
+  statusTextButtonLabel: { fontSize: 12, fontWeight: '800' },
   renameBox: { borderBottomWidth: 1, gap: 8, padding: 12 },
   rowTitle: { fontSize: 14, fontWeight: '800' },
   renameCopy: { fontSize: 12, lineHeight: 17 },
@@ -674,9 +794,49 @@ const styles = StyleSheet.create({
     height: 40,
     paddingHorizontal: 10,
   },
-  renameSaveButton: { height: 40, marginTop: 0, paddingHorizontal: 16 },
+  saveIconButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    height: 40,
+    justifyContent: 'center',
+    width: 44,
+  },
   list: { padding: 14, paddingBottom: 28 },
   footerPagination: { paddingBottom: 16 },
+  overview: {
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 10,
+    marginBottom: 10,
+    padding: 12,
+  },
+  overviewHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  overviewLabel: { fontSize: 11, fontWeight: '800' },
+  overviewTitle: { fontSize: 18, fontWeight: '900', marginTop: 2 },
+  readProgressBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  readProgressText: { fontSize: 12, fontWeight: '900' },
+  progressTrack: {
+    borderRadius: 999,
+    height: 7,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    borderRadius: 999,
+    height: '100%',
+  },
+  overviewStats: { flexDirection: 'row', gap: 8 },
+  overviewStat: { flex: 1 },
+  overviewStatValue: { fontSize: 18, fontWeight: '900' },
+  overviewStatLabel: { fontSize: 11, fontWeight: '800', marginTop: 2 },
+  statusSummaryText: { fontSize: 12, fontWeight: '700' },
   pagination: { alignItems: 'center', flexDirection: 'row', gap: 10, justifyContent: 'center', paddingTop: 8 },
   pageArrowButton: {
     alignItems: 'center',
@@ -717,10 +877,7 @@ const styles = StyleSheet.create({
     width: 24,
   },
   checkboxText: { fontSize: 14, fontWeight: '900' },
-  cover: { backgroundColor: '#e5e5e5', borderRadius: 4, height: 88, width: 60 },
-  missingCover: { opacity: 0.35 },
-  coverFallback: { alignItems: 'center', justifyContent: 'center' },
-  coverFallbackText: { color: '#555555', fontSize: 11, fontWeight: '800' },
+  cover: { borderRadius: 4, height: 88, width: 60 },
   rowBody: { flex: 1 },
   bookTitle: { fontSize: 16, fontWeight: '800', lineHeight: 21 },
   meta: { fontSize: 13, marginTop: 6 },
@@ -739,26 +896,7 @@ const styles = StyleSheet.create({
     height: 40,
     paddingHorizontal: 10,
   },
-  saveButton: {
-    alignItems: 'center',
-    borderRadius: 8,
-    height: 38,
-    justifyContent: 'center',
-  },
-  saveButtonText: { fontSize: 13, fontWeight: '800' },
   actionRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
-  missingActionRow: { flexWrap: 'wrap' },
-  missingPrimaryButton: { minWidth: 96 },
-  missingSecondaryButton: { minWidth: 96 },
-  smallButton: {
-    alignItems: 'center',
-    borderRadius: 8,
-    borderWidth: 1,
-    height: 34,
-    justifyContent: 'center',
-    paddingHorizontal: 12,
-  },
-  smallButtonText: { fontSize: 12, fontWeight: '800' },
   headerFavoriteButton: {
     alignItems: 'center',
     height: 36,

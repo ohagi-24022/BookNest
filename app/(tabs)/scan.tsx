@@ -9,6 +9,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -49,6 +50,7 @@ export default function ScanScreen() {
   const [isScanning, setIsScanning] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
+  const [showManualForm, setShowManualForm] = useState(false);
   const [scanMode, setScanMode] = useState<'confirm' | 'continuous'>('confirm');
   const [notice, setNotice] = useState<ScanNotice>({
     tone: 'neutral',
@@ -425,9 +427,27 @@ export default function ScanScreen() {
           </View>
         )}
 
-        {!showConfirmation && <View style={[styles.form, { borderTopColor: colors.border }]}>
+        {!showConfirmation && (
+          <View style={[styles.manualToggleRow, { borderTopColor: colors.border }]}>
+            <View style={styles.manualToggleText}>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>手動登録</Text>
+              <Text style={[styles.manualToggleCopy, { color: colors.muted }]}>
+                ISBN検索やバーコードなしの本を入力する時だけONにします。
+              </Text>
+            </View>
+            <Switch
+              value={showManualForm}
+              onValueChange={setShowManualForm}
+              trackColor={{ false: colors.elevated, true: colors.success }}
+              thumbColor={showManualForm ? '#ffffff' : colors.muted}
+            />
+          </View>
+        )}
+
+        {!showConfirmation && showManualForm && <View style={styles.form}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>手動登録</Text>
           <TextInput
+            autoCorrect={false}
             value={title}
             onChangeText={onTitleChange}
             placeholder="タイトル"
@@ -435,6 +455,7 @@ export default function ScanScreen() {
             style={[styles.input, { backgroundColor: colors.input, color: colors.text }]}
           />
           <TextInput
+            autoCorrect={false}
             value={seriesTitle}
             onChangeText={setSeriesTitle}
             placeholder="シリーズ名"
@@ -453,6 +474,9 @@ export default function ScanScreen() {
             <TextInput
               value={isbn}
               onChangeText={setIsbn}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              keyboardType="number-pad"
               placeholder="ISBN"
               placeholderTextColor={colors.muted}
               style={[styles.input, styles.flexInput, { backgroundColor: colors.input, color: colors.text }]}
@@ -466,6 +490,7 @@ export default function ScanScreen() {
             </Pressable>
           </View>
           <TextInput
+            autoCorrect={false}
             value={author}
             onChangeText={setAuthor}
             placeholder="著者"
@@ -473,6 +498,7 @@ export default function ScanScreen() {
             style={[styles.input, { backgroundColor: colors.input, color: colors.text }]}
           />
           <TextInput
+            autoCorrect={false}
             value={publisher}
             onChangeText={setPublisher}
             placeholder="出版社"
@@ -542,7 +568,17 @@ const styles = StyleSheet.create({
   },
   disabled: { opacity: 0.55 },
   primaryButtonText: { color: '#ffffff', fontSize: 15, fontWeight: '800' },
-  form: { borderTopWidth: 1, paddingTop: 18 },
+  form: { paddingTop: 14 },
+  manualToggleRow: {
+    alignItems: 'center',
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    gap: 14,
+    marginTop: 4,
+    paddingTop: 18,
+  },
+  manualToggleText: { flex: 1 },
+  manualToggleCopy: { fontSize: 12, lineHeight: 17, marginTop: -6 },
   confirmation: {
     alignItems: 'flex-start',
     borderRadius: 8,

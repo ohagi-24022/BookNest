@@ -30,6 +30,7 @@ type SupabaseClient = NonNullable<typeof supabase>;
 
 const STORAGE_KEY = 'booknest.library.v1';
 const DEMO_USER_ID = 'local-user';
+const BOOKS_FETCH_PAGE_SIZE = 1000;
 
 type BookRow = {
   id: string;
@@ -44,6 +45,9 @@ type BookRow = {
   status: ReadingStatus;
   created_at: string;
 };
+
+const BOOK_SELECT_COLUMNS =
+  'id,user_id,isbn,title,series_title,volume_number,author,publisher,thumbnail_url,status,created_at';
 
 type SupabaseLikeError = {
   message?: string;
@@ -174,6 +178,9 @@ function createId(prefix: string) {
 }
 
 function createUuid() {
+  const randomUuid = globalThis.crypto?.randomUUID?.();
+  if (randomUuid) return randomUuid;
+
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
     const random = Math.floor(Math.random() * 16);
     const value = character === 'x' ? random : (random & 0x3) | 0x8;
@@ -290,17 +297,29 @@ export function LibraryProvider({ children }: PropsWithChildren) {
 
     async function loadBooks(client: SupabaseClient) {
       try {
-        const { data, error: fetchError } = await client
-          .from('books')
-          .select(
-            'id,user_id,isbn,title,series_title,volume_number,author,publisher,thumbnail_url,status,created_at',
-          )
-          .order('created_at', { ascending: false });
+        const rows: BookRow[] = [];
+        let page = 0;
 
-        if (fetchError) {
-          throw new Error(formatSupabaseError(fetchError, 'Failed to load books.'));
+        while (true) {
+          const from = page * BOOKS_FETCH_PAGE_SIZE;
+          const to = from + BOOKS_FETCH_PAGE_SIZE - 1;
+          const { data, error: fetchError } = await client
+            .from('books')
+            .select(BOOK_SELECT_COLUMNS)
+            .order('created_at', { ascending: false })
+            .range(from, to);
+
+          if (fetchError) {
+            throw new Error(formatSupabaseError(fetchError, 'Failed to load books.'));
+          }
+
+          const pageRows = (data ?? []) as BookRow[];
+          rows.push(...pageRows);
+          if (pageRows.length < BOOKS_FETCH_PAGE_SIZE) break;
+          page += 1;
         }
-        const cloudBooks = ((data ?? []) as BookRow[]).map(fromBookRow);
+
+        const cloudBooks = rows.map(fromBookRow);
         const comparisonBooks = [...cloudBooks];
         const booksToImport: Book[] = [];
 

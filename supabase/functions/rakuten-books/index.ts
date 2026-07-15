@@ -4,6 +4,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 const RAKUTEN_API_BASE_URL = 'https://openapi.rakuten.co.jp/services/api';
 const DEFAULT_REFERER = 'https://github.com/ohagi-24022/BookNest';
 const PROXY_VERSION = '2026-07-02-raw-tls';
+const RAW_TLS_TIMEOUT_MS = 10_000;
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const SUPABASE_SERVICE_ROLE_KEY =
@@ -246,10 +247,13 @@ async function fetchRakutenOverRawTls(
   referer: string,
 ): Promise<{ status: number; text: string }> {
   const url = new URL(urlString);
-  const connection = await Deno.connectTls({
-    hostname: url.hostname,
-    port: 443,
-  });
+  const connection = await withTimeout(
+    Deno.connectTls({
+      hostname: url.hostname,
+      port: 443,
+    }),
+    'Rakuten API connection timed out.',
+  );
 
   try {
     const requestText = [
@@ -263,14 +267,20 @@ async function fetchRakutenOverRawTls(
       '',
       '',
     ].join('\r\n');
-    await writeAll(connection, new TextEncoder().encode(requestText));
+    await withTimeout(
+      writeAll(connection, new TextEncoder().encode(requestText)),
+      'Rakuten API request timed out.',
+    );
 
     const chunks: Uint8Array[] = [];
     let totalLength = 0;
     const buffer = new Uint8Array(16 * 1024);
 
     while (true) {
-      const bytesRead = await connection.read(buffer);
+      const bytesRead = await withTimeout(
+        connection.read(buffer),
+        'Rakuten API response timed out.',
+      );
       if (bytesRead === null) break;
       totalLength += bytesRead;
       if (totalLength > 5 * 1024 * 1024) {
@@ -349,6 +359,17 @@ async function writeAll(
   while (offset < bytes.length) {
     offset += await connection.write(bytes.subarray(offset));
   }
+}
+
+function withTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), RAW_TLS_TIMEOUT_MS);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
 }
 
 function findSequence(bytes: Uint8Array, sequence: number[], start = 0) {

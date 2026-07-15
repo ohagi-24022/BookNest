@@ -117,6 +117,7 @@ export type SeriesPublicationInfo = {
   latestVolume: number;
   source: 'Rakuten Books' | 'Google Books';
   checkedAt: string;
+  isCompleted?: boolean;
 };
 
 export type BookVolumeDetails = {
@@ -471,6 +472,114 @@ function findLatestVolumeFromTitles(titles: Array<string | undefined>, seriesTit
   return volumes.length > 0 ? Math.max(...volumes) : null;
 }
 
+function findSeriesCompletionFromTitles(titles: Array<string | undefined>, latestVolume: number | null) {
+  return titles.some((title) => {
+    if (!title) return false;
+    const normalizedTitle = title.normalize('NFKC');
+    if (/完結|完結版|完結セット|最終巻|最終回|全巻|全巻セット|全\s*\d+\s*巻/.test(normalizedTitle)) return true;
+    const allVolumeMatch = normalizedTitle.match(/全\s*(\d+)\s*巻/);
+    return !!allVolumeMatch && !!latestVolume && Number(allVolumeMatch[1]) === latestVolume;
+  });
+}
+
+function rakutenItemsToCompletionTexts(items?: RakutenBooksResponse['Items']) {
+  return (
+    items?.flatMap((entry) => [
+      entry.Item?.title,
+      entry.Item?.subTitle,
+      entry.Item?.itemCaption,
+      entry.Item?.author,
+      entry.Item?.publisherName,
+    ]) ?? []
+  );
+}
+
+function rakutenItemsToTitleTexts(items?: RakutenBooksResponse['Items']) {
+  return items?.flatMap((entry) => [entry.Item?.title, entry.Item?.subTitle]) ?? [];
+}
+
+async function lookupRakutenCompletionHint(seriesTitle: string, latestVolume: number | null) {
+  if (!supabase || !latestVolume) return false;
+
+  const path = 'BooksTotal/Search/20170404';
+  const queries = [
+    `${seriesTitle} 完結`,
+    `${seriesTitle} 全巻`,
+    `${seriesTitle} 全${latestVolume}巻`,
+    `${seriesTitle} 最終巻`,
+  ];
+
+  for (const query of queries) {
+    const searchParams = new URLSearchParams({
+      keyword: query,
+      hits: '10',
+      sort: '-releaseDate',
+      outOfStockFlag: '1',
+      size: '9',
+    });
+    const response = await fetchRakutenWithTimeout(
+      `https://openapi.rakuten.co.jp/services/api/${path}?${searchParams.toString()}`,
+      { path, params: Object.fromEntries(searchParams.entries()) },
+    );
+    if (!response.ok) continue;
+
+    const payload = (await response.json()) as RakutenBooksResponse;
+    if (findSeriesCompletionFromTitles(rakutenItemsToCompletionTexts(payload.Items), latestVolume)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function lookupGoogleCompletionHint(seriesTitle: string, latestVolume: number | null) {
+  if (!latestVolume) return false;
+
+  const queries = [
+    `intitle:${seriesTitle} 完結`,
+    `intitle:${seriesTitle} 全巻`,
+    `intitle:${seriesTitle} 全${latestVolume}巻`,
+    `intitle:${seriesTitle} 最終巻`,
+  ];
+
+  for (const query of queries) {
+    const params = new URLSearchParams({
+      q: query,
+      maxResults: '10',
+      printType: 'books',
+    });
+    if (env.googleBooksApiKey) params.set('key', env.googleBooksApiKey);
+
+    const response = await fetchWithTimeout(
+      `https://www.googleapis.com/books/v1/volumes?${params.toString()}`,
+    );
+    if (!response.ok) continue;
+
+    const payload = (await response.json()) as GoogleBooksResponse;
+    const titles = payload.items?.flatMap((item) => [
+      item.volumeInfo?.title,
+      item.volumeInfo?.subtitle,
+      item.volumeInfo?.description,
+    ]) ?? [];
+    if (findSeriesCompletionFromTitles(titles, latestVolume)) return true;
+  }
+
+  return false;
+}
+
+async function lookupSeriesCompletionHint(seriesTitle: string, latestVolume: number | null) {
+  try {
+    if (await lookupRakutenCompletionHint(seriesTitle, latestVolume)) return true;
+  } catch {
+    // 完結情報は補助情報なので、失敗しても最新巻の取得結果を優先します。
+  }
+  try {
+    return await lookupGoogleCompletionHint(seriesTitle, latestVolume);
+  } catch {
+    return false;
+  }
+}
+
 async function lookupLatestRakutenSeriesVolume(seriesTitle: string) {
   if (!supabase) return null;
 
@@ -489,10 +598,14 @@ async function lookupLatestRakutenSeriesVolume(seriesTitle: string) {
   if (!response.ok) return null;
 
   const payload = (await response.json()) as RakutenBooksResponse;
-  return findLatestVolumeFromTitles(
-    payload.Items?.map((entry) => entry.Item?.title) ?? [],
-    seriesTitle,
-  );
+  const titles = rakutenItemsToTitleTexts(payload.Items);
+  const latestVolume = findLatestVolumeFromTitles(titles, seriesTitle);
+  return latestVolume
+    ? {
+        isCompleted: findSeriesCompletionFromTitles(titles, latestVolume),
+        latestVolume,
+      }
+    : null;
 }
 
 async function lookupLatestGoogleSeriesVolume(seriesTitle: string) {
@@ -510,10 +623,14 @@ async function lookupLatestGoogleSeriesVolume(seriesTitle: string) {
   if (!response.ok) return null;
 
   const payload = (await response.json()) as GoogleBooksResponse;
-  return findLatestVolumeFromTitles(
-    payload.items?.map((item) => item.volumeInfo?.title) ?? [],
-    seriesTitle,
-  );
+  const titles = payload.items?.map((item) => item.volumeInfo?.title) ?? [];
+  const latestVolume = findLatestVolumeFromTitles(titles, seriesTitle);
+  return latestVolume
+    ? {
+        isCompleted: findSeriesCompletionFromTitles(titles, latestVolume),
+        latestVolume,
+      }
+    : null;
 }
 
 export async function lookupLatestSeriesPublication(
@@ -522,22 +639,30 @@ export async function lookupLatestSeriesPublication(
   const normalizedTitle = seriesTitle.trim();
   if (!normalizedTitle) return null;
 
-  const rakutenVolume = await lookupLatestRakutenSeriesVolume(normalizedTitle);
-  if (rakutenVolume) {
+  const rakutenPublication = await lookupLatestRakutenSeriesVolume(normalizedTitle);
+  if (rakutenPublication) {
+    const isCompleted =
+      rakutenPublication.isCompleted ||
+      (await lookupSeriesCompletionHint(normalizedTitle, rakutenPublication.latestVolume));
     return {
-      latestVolume: rakutenVolume,
+      latestVolume: rakutenPublication.latestVolume,
       source: 'Rakuten Books',
       checkedAt: new Date().toISOString(),
+      isCompleted,
     };
   }
 
-  const googleVolume = await lookupLatestGoogleSeriesVolume(normalizedTitle);
-  if (!googleVolume) return null;
+  const googlePublication = await lookupLatestGoogleSeriesVolume(normalizedTitle);
+  if (!googlePublication) return null;
+  const isCompleted =
+    googlePublication.isCompleted ||
+    (await lookupSeriesCompletionHint(normalizedTitle, googlePublication.latestVolume));
 
   return {
-    latestVolume: googleVolume,
+    latestVolume: googlePublication.latestVolume,
     source: 'Google Books',
     checkedAt: new Date().toISOString(),
+    isCompleted,
   };
 }
 

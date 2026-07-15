@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Image, ImageStyle, StyleProp, StyleSheet, Text, View } from 'react-native';
 
+import { useAppTheme } from '../store/ThemeContext';
+
 type BookCoverProps = {
   thumbnailUrl?: string;
   isbn?: string;
@@ -50,6 +52,7 @@ export function BookCover({
   missing = false,
   placeholderText = 'No Cover',
 }: BookCoverProps) {
+  const { colors } = useAppTheme();
   const candidates = useMemo(
     () =>
       uniqueUrls([
@@ -69,7 +72,12 @@ export function BookCover({
   }, [candidateKey]);
 
   const imageUri = candidates[candidateIndex];
-  const coverStyle = [styles.cover, style, missing && styles.missingCover];
+  const coverStyle = [
+    styles.cover,
+    { backgroundColor: colors.elevated },
+    style,
+    missing && styles.missingCover,
+  ];
 
   if (imageUri) {
     return (
@@ -85,7 +93,7 @@ export function BookCover({
 
   return (
     <View style={[coverStyle, styles.coverFallback]}>
-      <Text style={styles.coverFallbackText} numberOfLines={2}>
+      <Text style={[styles.coverFallbackText, { color: colors.muted }]} numberOfLines={2}>
         {placeholderText}
       </Text>
     </View>
@@ -94,13 +102,11 @@ export function BookCover({
 
 const styles = StyleSheet.create({
   cover: {
-    backgroundColor: '#e5e5e5',
     overflow: 'hidden',
   },
   missingCover: { opacity: 0.35 },
   coverFallback: { alignItems: 'center', justifyContent: 'center' },
   coverFallbackText: {
-    color: '#777777',
     fontSize: 11,
     fontWeight: '800',
     paddingHorizontal: 4,

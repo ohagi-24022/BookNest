@@ -44,11 +44,11 @@ export function RankingCard({
       <Text style={[styles.rank, { color: colors.text }]}>#{index + 1}</Text>
       <BookCover
         thumbnailUrl={row.coverUrl}
-        style={compact ? styles.compactCover : styles.wideCover}
         placeholderText="No Cover"
+        style={compact ? styles.compactCover : styles.wideCover}
       />
       <View style={[styles.body, compact ? styles.compactBody : null]}>
-        <Text style={[styles.title, { color: colors.text }]} numberOfLines={compact ? 2 : 3}>
+        <Text numberOfLines={compact ? 2 : 3} style={[styles.title, { color: colors.text }]}>
           {row.title}
         </Text>
         {compact && row.score !== undefined ? (
@@ -65,11 +65,14 @@ export function RankingCard({
             {row.ownedVolumeCount !== undefined ? (
               <Metric icon="albums-outline" label="登録" value={`${row.ownedVolumeCount}冊`} />
             ) : null}
+            {row.favoriteCount !== undefined ? (
+              <Metric icon="bookmark-outline" label="お気に入り" value={`${row.favoriteCount}`} />
+            ) : null}
             {row.score !== undefined ? <Metric icon="star-outline" label="優先度" value={`${row.score}点`} /> : null}
           </View>
         ) : null}
         {!compact && (row.averageScore !== undefined || row.popularityScore !== undefined) ? (
-          <Text style={[styles.subText, { color: colors.muted }]} numberOfLines={1}>
+          <Text numberOfLines={1} style={[styles.subText, { color: colors.muted }]}>
             {row.averageScore !== undefined ? `平均 ${row.averageScore.toFixed(1)}点` : ''}
             {row.popularityScore !== undefined ? ` / 人気度 ${row.popularityScore.toFixed(1)}` : ''}
           </Text>
@@ -77,7 +80,7 @@ export function RankingCard({
       </View>
       {compact && expanded && onAddWishlist ? (
         <Pressable
-          accessibilityLabel={`${row.title}を欲しいに追加`}
+          accessibilityLabel={added ? `${row.title}は欲しいに追加済み` : `${row.title}を欲しいに追加`}
           disabled={added}
           onPress={handleAddWishlist}
           style={[
@@ -93,7 +96,7 @@ export function RankingCard({
       ) : null}
       {!compact && onAddWishlist ? (
         <Pressable
-          accessibilityLabel={`${row.title}を欲しいに追加`}
+          accessibilityLabel={added ? `${row.title}は欲しいに追加済み` : `${row.title}を欲しいに追加`}
           disabled={added}
           onPress={handleAddWishlist}
           style={[

@@ -3,6 +3,7 @@ import { WishlistItem } from '../store/WishlistContext';
 export type GlobalRankingRow = {
   average_score: number | string | null;
   cover_url: string | null;
+  favorite_count: number;
   owned_volume_count: number;
   owner_count: number;
   popularity_score: number | string | null;
@@ -11,11 +12,12 @@ export type GlobalRankingRow = {
   want_count: number;
 };
 
-export type RankingCategory = 'overall' | 'wanted' | 'owned' | 'personal';
+export type RankingCategory = 'overall' | 'wanted' | 'owned' | 'favorite' | 'personal';
 
 export type RankingDisplayRow = {
   averageScore?: number;
   coverUrl?: string;
+  favoriteCount?: number;
   ownedVolumeCount?: number;
   ownerCount?: number;
   popularityScore?: number;
@@ -27,7 +29,7 @@ export type RankingDisplayRow = {
 export const rankingCategoryLabels: Record<RankingCategory, { description: string; title: string }> = {
   overall: {
     title: '総合ランキング',
-    description: '欲しい登録数、所持ユーザー数、登録冊数をまとめたランキングです。',
+    description: '欲しい登録、所持ユーザー数、登録冊数をまとめたランキングです。',
   },
   wanted: {
     title: '欲しいランキング',
@@ -37,8 +39,12 @@ export const rankingCategoryLabels: Record<RankingCategory, { description: strin
     title: '所持ランキング',
     description: '本棚に登録している利用者が多い漫画です。',
   },
+  favorite: {
+    title: 'お気に入りランキング',
+    description: '利用者全体でお気に入りに入れられているシリーズです。',
+  },
   personal: {
-    title: '自分の欲しい順位',
+    title: '自分の欲しい順',
     description: 'あなたの欲しいリストをスコア順に並べたランキングです。',
   },
 };
@@ -54,6 +60,7 @@ function toDisplayRow(row: GlobalRankingRow): RankingDisplayRow {
   return {
     averageScore: toNumber(row.average_score),
     coverUrl: row.cover_url ?? undefined,
+    favoriteCount: Number(row.favorite_count ?? 0),
     ownedVolumeCount: Number(row.owned_volume_count ?? 0),
     ownerCount: Number(row.owner_count ?? 0),
     popularityScore: toNumber(row.popularity_score),
@@ -67,6 +74,18 @@ export function buildRankingRows(
   globalRows: GlobalRankingRow[],
   wishlistItems: WishlistItem[],
 ) {
+  if (category === 'favorite') {
+    return globalRows
+      .map(toDisplayRow)
+      .filter((row) => Number(row.favoriteCount ?? 0) > 0)
+      .sort(
+        (left, right) =>
+          Number(right.favoriteCount ?? 0) - Number(left.favoriteCount ?? 0) ||
+          Number(right.ownedVolumeCount ?? 0) - Number(left.ownedVolumeCount ?? 0) ||
+          left.title.localeCompare(right.title),
+      );
+  }
+
   if (category === 'personal') {
     return wishlistItems
       .map((item) => ({
