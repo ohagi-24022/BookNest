@@ -3,9 +3,12 @@ import { Animated, Pressable, StyleSheet, Text, TextInput, View } from 'react-na
 
 import { useAppTheme } from '../../store/ThemeContext';
 
+type SeriesDisplayMode = 'detail' | 'cover' | 'title';
+
 type HomeToolbarProps = {
   translateY: Animated.Value;
   viewMode: 'series' | 'books';
+  seriesDisplayMode: SeriesDisplayMode;
   visibleCount: number;
   totalCount: number;
   requiresAuth: boolean;
@@ -16,6 +19,7 @@ type HomeToolbarProps = {
   sortLabel: string;
   onHeightChange: (height: number) => void;
   onQueryChange: (query: string) => void;
+  onSeriesDisplayModeChange: () => void;
   onViewModeChange: (mode: 'series' | 'books') => void;
   onOpenFilter: () => void;
   onOpenSort: () => void;
@@ -24,6 +28,7 @@ type HomeToolbarProps = {
 export function HomeToolbar({
   translateY,
   viewMode,
+  seriesDisplayMode,
   visibleCount,
   totalCount,
   requiresAuth,
@@ -34,6 +39,7 @@ export function HomeToolbar({
   sortLabel,
   onHeightChange,
   onQueryChange,
+  onSeriesDisplayModeChange,
   onViewModeChange,
   onOpenFilter,
   onOpenSort,
@@ -48,6 +54,8 @@ export function HomeToolbar({
       : viewMode === 'series'
         ? `${visibleCount}シリーズを表示`
         : `${visibleCount}冊を表示`;
+  const displayIcon =
+    seriesDisplayMode === 'cover' ? 'grid-outline' : seriesDisplayMode === 'title' ? 'list-outline' : 'albums-outline';
 
   return (
     <Animated.View
@@ -82,8 +90,19 @@ export function HomeToolbar({
           onChangeText={onQueryChange}
           placeholder="本棚を検索"
           placeholderTextColor={colors.muted}
+          autoCorrect={false}
+          autoCapitalize="none"
           style={[styles.search, { backgroundColor: colors.input, color: colors.text }]}
         />
+        {viewMode === 'series' && (
+          <Pressable
+            accessibilityLabel="シリーズの表示方法を変更"
+            onPress={onSeriesDisplayModeChange}
+            style={[styles.iconButton, { borderColor: colors.border }]}
+          >
+            <Ionicons color={colors.text} name={displayIcon} size={18} />
+          </Pressable>
+        )}
         <Pressable
           accessibilityLabel={`表示条件を開く。現在: ${filterLabel}`}
           onPress={onOpenFilter}

@@ -7,10 +7,17 @@ import {
   FlatList,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  Pressable,
   StyleSheet,
+  Text,
+  TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useRouter } from 'expo-router';
 
+import { BookCover } from '../../src/components/BookCover';
 import { BookRow } from '../../src/components/home/BookRow';
 import { EmptyLibraryState } from '../../src/components/home/EmptyLibraryState';
 import { HomeToolbar } from '../../src/components/home/HomeToolbar';
@@ -43,6 +50,7 @@ type HomeFilter =
   | `publisher:${string}`;
 type SeriesSort = 'title' | 'recent' | 'missing' | 'unread' | 'completion' | 'favorite' | 'author' | 'publisher';
 type BookSort = 'recent' | 'title' | 'series' | 'volume' | 'status' | 'favorite' | 'author' | 'publisher';
+type SeriesDisplayMode = 'detail' | 'cover' | 'title';
 type SeriesPublicationCache = Record<string, SeriesPublicationInfo>;
 type SeriesStats = {
   completionRate: number;
@@ -152,14 +160,23 @@ function findRepresentativeRefreshTarget(books: Book[], seriesTitle: string) {
     )[0];
 }
 
+function getNextSeriesDisplayMode(mode: SeriesDisplayMode): SeriesDisplayMode {
+  if (mode === 'detail') return 'cover';
+  if (mode === 'cover') return 'title';
+  return 'detail';
+}
+
 export default function HomeScreen() {
   const { colors } = useAppTheme();
+  const router = useRouter();
+  const { width: windowWidth } = useWindowDimensions();
   const { favoriteSeriesKeys, hydrated: appSettingsHydrated, newReleaseNotifications, setFavoriteSeries, showPublishedLatestVolume } =
     useAppSettings();
   const { user } = useAuth();
   const { books, error, loading, repairBookMetadata, requiresAuth, seriesGroups } = useLibrary();
   const [filters, setFilters] = useState<HomeFilter[]>(['all']);
   const [viewMode, setViewMode] = useState<'series' | 'books'>('series');
+  const [seriesDisplayMode, setSeriesDisplayMode] = useState<SeriesDisplayMode>('detail');
   const [seriesSort, setSeriesSort] = useState<SeriesSort>('title');
   const [bookSort, setBookSort] = useState<BookSort>('recent');
   const [query, setQuery] = useState('');
@@ -180,6 +197,8 @@ export default function HomeScreen() {
   const directionDistanceRef = useRef(0);
   const lastDirectionRef = useRef<1 | -1>(1);
   const favoriteSeriesKeySet = useMemo(() => new Set(visibleFavoriteSeriesKeys), [visibleFavoriteSeriesKeys]);
+  const coverGridColumns = Math.max(3, Math.floor((windowWidth - 36 + 10) / 92));
+  const coverTileWidth = (windowWidth - 36 - (coverGridColumns - 1) * 10) / coverGridColumns;
   activeViewModeRef.current = viewMode;
 
   useEffect(() => {
@@ -642,6 +661,7 @@ export default function HomeScreen() {
       <HomeToolbar
         translateY={toolbarTranslateY}
         viewMode={viewMode}
+        seriesDisplayMode={seriesDisplayMode}
         visibleCount={viewMode === 'series' ? visibleGroups.length : visibleBooks.length}
         totalCount={viewMode === 'series' ? seriesGroups.length : books.length}
         requiresAuth={requiresAuth}
@@ -656,6 +676,7 @@ export default function HomeScreen() {
           if (!toolbarVisibleRef.current) toolbarTranslateY.setValue(-nextHeight);
         }}
         onQueryChange={setQuery}
+        onSeriesDisplayModeChange={() => setSeriesDisplayMode((current) => getNextSeriesDisplayMode(current))}
         onViewModeChange={selectViewMode}
         onOpenFilter={() => setOpenMenu('filter')}
         onOpenSort={() => setOpenMenu('sort')}
@@ -663,13 +684,18 @@ export default function HomeScreen() {
 
       {viewMode === 'series' ? (
         <FlatList
-          key="series-list"
+          key={`series-${seriesDisplayMode}-${seriesDisplayMode === 'cover' ? coverGridColumns : 1}`}
           ref={seriesListRef}
           style={styles.list}
           data={visibleGroups}
-          extraData={`${listVersion}-${visibleFavoriteSeriesKeys.join(',')}-${refreshingSeriesTitle}-${showPublishedLatestVolume}-${notificationSeriesKeys.join(',')}-${updatingNotificationSeriesKey}`}
+          extraData={`${listVersion}-${seriesDisplayMode}-${coverTileWidth}-${visibleFavoriteSeriesKeys.join(',')}-${refreshingSeriesTitle}-${showPublishedLatestVolume}-${notificationSeriesKeys.join(',')}-${updatingNotificationSeriesKey}`}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={[styles.grid, { paddingTop: listTopPadding }]}
+          numColumns={seriesDisplayMode === 'cover' ? coverGridColumns : 1}
+          columnWrapperStyle={seriesDisplayMode === 'cover' ? styles.coverGridRow : undefined}
+          contentContainerStyle={[
+            seriesDisplayMode === 'cover' ? styles.coverGrid : styles.grid,
+            { paddingTop: listTopPadding },
+          ]}
           showsVerticalScrollIndicator={false}
           onScroll={handleScroll}
           scrollEventThrottle={16}
@@ -677,6 +703,74 @@ export default function HomeScreen() {
             const cacheKey = normalizeSeriesKey(item.title);
             const stats = seriesStats.get(cacheKey);
             const publicationInfo = publicationCache[cacheKey];
+            if (seriesDisplayMode === 'cover') {
+              return (
+                <Pressable
+                  accessibilityLabel={`${item.title}の詳細を開く`}
+                  onPress={() => router.push(`/series/${encodeURIComponent(item.title)}`)}
+                  style={[styles.coverTile, { width: coverTileWidth }]}
+                >
+                  <BookCover
+                    thumbnailUrl={item.representative.thumbnailUrl}
+                    isbn={item.representative.isbn}
+                    style={styles.coverTileImage}
+                  />
+                </Pressable>
+              );
+            }
+            if (seriesDisplayMode === 'title') {
+              return (
+                <View style={[styles.titleRow, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                  <Pressable
+                    accessibilityLabel={`${item.title}の詳細を開く`}
+                    onPress={() => router.push(`/series/${encodeURIComponent(item.title)}`)}
+                    style={styles.titleRowBody}
+                  >
+                    <Text numberOfLines={1} style={[styles.titleRowText, { color: colors.text }]}>
+                      {item.title}
+                    </Text>
+                    <Text numberOfLines={1} style={[styles.titleRowMeta, { color: colors.muted }]}>
+                      {item.ownedCount}冊所持
+                      {item.latestVolume ? ` / ${item.latestVolume}巻まで` : ''}
+                      {(stats?.missingVolumes.length ?? 0) > 0 ? ` / 不足 ${stats?.missingVolumes.length}` : ''}
+                    </Text>
+                  </Pressable>
+                  <View style={styles.titleRowActions}>
+                    <TouchableOpacity
+                      accessibilityLabel={favoriteSeriesKeySet.has(cacheKey) ? `${item.title}のお気に入りを解除` : `${item.title}をお気に入りに追加`}
+                      activeOpacity={0.75}
+                      onPress={() => void toggleSeriesFavorite(item)}
+                      style={[styles.titleIconButton, { borderColor: colors.border }]}
+                    >
+                      <Ionicons
+                        color={favoriteSeriesKeySet.has(cacheKey) ? colors.primary : colors.muted}
+                        name={favoriteSeriesKeySet.has(cacheKey) ? 'bookmark' : 'bookmark-outline'}
+                        size={17}
+                      />
+                    </TouchableOpacity>
+                    {showPublishedLatestVolume && (
+                      <TouchableOpacity
+                        accessibilityLabel={`${item.title}の刊行情報を更新`}
+                        activeOpacity={0.75}
+                        disabled={refreshingSeriesTitle !== null}
+                        onPress={() => void refreshSeriesPublication(item.title, item.latestVolume)}
+                        style={[
+                          styles.titleIconButton,
+                          { borderColor: colors.border },
+                          refreshingSeriesTitle !== null && styles.disabledButton,
+                        ]}
+                      >
+                        <Ionicons
+                          color={colors.text}
+                          name={refreshingSeriesTitle === item.title ? 'hourglass-outline' : 'refresh'}
+                          size={16}
+                        />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </View>
+              );
+            }
             return (
               <SeriesCard
                 key={item.id}
@@ -797,5 +891,40 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   list: { flex: 1 },
   grid: { paddingBottom: 110, paddingHorizontal: 18 },
+  coverGrid: { paddingBottom: 110, paddingHorizontal: 18 },
+  coverGridRow: { gap: 10 },
+  coverTile: {
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  coverTileImage: {
+    aspectRatio: 0.68,
+    borderRadius: 5,
+    width: '100%',
+  },
   bookList: { paddingBottom: 110, paddingHorizontal: 18 },
+  titleRow: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 10,
+    minHeight: 58,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  titleRowBody: { flex: 1, minWidth: 0 },
+  titleRowText: { fontSize: 15, fontWeight: '800', lineHeight: 20 },
+  titleRowMeta: { fontSize: 12, marginTop: 2 },
+  titleRowActions: { flexDirection: 'row', gap: 6 },
+  titleIconButton: {
+    alignItems: 'center',
+    borderRadius: 6,
+    borderWidth: 1,
+    height: 32,
+    justifyContent: 'center',
+    width: 34,
+  },
+  disabledButton: { opacity: 0.4 },
 });
