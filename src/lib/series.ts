@@ -50,7 +50,7 @@ export function normalizeSeriesKey(seriesTitle: string) {
     .normalize('NFKC')
     .toLocaleLowerCase()
     .replace(EDITION_SUFFIX_PATTERN, '')
-    .replace(/[\s・･:：\-–—_'"“”‘’()[\]{}「」『』【】〈〉《》]/g, '')
+    .replace(/[\s・･:：\-–—_'"“”‘’()[\]{}「」『』【】〈〉《》!?！？。.．]/g, '')
     .trim();
 }
 

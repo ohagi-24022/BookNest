@@ -68,7 +68,7 @@ export function SeriesCard({
     unownedVolumes.length > 0 ||
     publicationInfo?.isCompleted;
 
-  const openSeries = () => router.push(`/series/${encodeURIComponent(group.title)}`);
+  const openSeries = () => router.navigate(`/(tabs)/series/${encodeURIComponent(group.title)}`);
 
   return (
     <View style={[styles.row, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -137,8 +137,7 @@ export function SeriesCard({
                 size={18}
               />
             </TouchableOpacity>
-            {showPublishedLatestVolume && (
-              <TouchableOpacity
+            <TouchableOpacity
                 accessibilityLabel={`${group.title}の刊行情報を更新`}
                 activeOpacity={0.75}
                 disabled={refreshDisabled}
@@ -154,8 +153,7 @@ export function SeriesCard({
                   name={refreshing ? 'hourglass-outline' : 'refresh'}
                   size={17}
                 />
-              </TouchableOpacity>
-            )}
+            </TouchableOpacity>
           </View>
         </View>
 

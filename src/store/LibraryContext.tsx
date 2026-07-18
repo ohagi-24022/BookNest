@@ -72,6 +72,10 @@ type MetadataRepairResult = {
   debugEntries?: BookLookupDebugEntry[];
 };
 
+type MetadataRepairOptions = {
+  preserveIdentity?: boolean;
+};
+
 type LibraryContextValue = {
   books: Book[];
   loading: boolean;
@@ -86,7 +90,7 @@ type LibraryContextValue = {
   updateBook: (bookId: string, updates: Partial<BookInput>) => Promise<void>;
   renameSeries: (fromSeriesTitle: string, toSeriesTitle: string) => Promise<number>;
   deleteBook: (bookId: string) => Promise<void>;
-  repairBookMetadata: (bookId: string) => Promise<MetadataRepairResult>;
+  repairBookMetadata: (bookId: string, options?: MetadataRepairOptions) => Promise<MetadataRepairResult>;
   bulkUpdateStatus: (bookIds: string[], status: ReadingStatus) => Promise<void>;
   getSeriesItems: (seriesTitle: string) => ShelfItem[];
 };
@@ -597,13 +601,21 @@ export function LibraryProvider({ children }: PropsWithChildren) {
 
   const deleteBook = useCallback(async (bookId: string) => {
     const book = books.find((candidate) => candidate.id === bookId);
-    const deleteByIsbn = !!book?.isbn && !isUuid(bookId);
+    const normalizedTargetIsbn = book?.isbn?.replace(/[^0-9X]/gi, '').toUpperCase();
+    const matchesDeleteTarget = (candidate: Book) =>
+      candidate.id === bookId ||
+      (!!normalizedTargetIsbn && candidate.isbn?.replace(/[^0-9X]/gi, '').toUpperCase() === normalizedTargetIsbn);
 
     if (configured) {
       if (supabase && user) {
         const query = supabase.from('books').delete().eq('user_id', user.id);
+        const deleteConditions = [
+          isUuid(bookId) ? `id.eq.${bookId}` : undefined,
+          book?.isbn ? `isbn.eq.${book.isbn}` : undefined,
+          normalizedTargetIsbn ? `isbn.eq.${normalizedTargetIsbn}` : undefined,
+        ].filter((condition, index, conditions): condition is string => !!condition && conditions.indexOf(condition) === index);
         const { error: deleteError } =
-          deleteByIsbn ? await query.eq('isbn', book.isbn) : await query.eq('id', bookId);
+          deleteConditions.length > 0 ? await query.or(deleteConditions.join(',')) : { error: null };
 
         if (deleteError) {
           throw new Error(formatSupabaseError(deleteError, 'Supabaseの削除に失敗しました。'));
@@ -612,15 +624,11 @@ export function LibraryProvider({ children }: PropsWithChildren) {
     }
 
     setBooks((currentBooks) =>
-      currentBooks.filter((currentBook) =>
-        deleteByIsbn ? currentBook.isbn !== book?.isbn : currentBook.id !== bookId,
-      ),
+      currentBooks.filter((currentBook) => !matchesDeleteTarget(currentBook)),
     );
     if (configured && !user) {
       setPendingLocalBooks((currentBooks) =>
-        currentBooks.filter((currentBook) =>
-          deleteByIsbn ? currentBook.isbn !== book?.isbn : currentBook.id !== bookId,
-        ),
+        currentBooks.filter((currentBook) => !matchesDeleteTarget(currentBook)),
       );
     }
   }, [books, configured, user]);
@@ -660,7 +668,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
     return targetBooks.length;
   }, [books, configured, user]);
 
-  const repairBookMetadata = useCallback(async (bookId: string) => {
+  const repairBookMetadata = useCallback(async (bookId: string, options: MetadataRepairOptions = {}) => {
     const book = books.find((candidate) => candidate.id === bookId);
     if (!book) throw new Error('対象の本が見つかりません。');
 
@@ -672,8 +680,8 @@ export function LibraryProvider({ children }: PropsWithChildren) {
     if (!metadata) throw new Error('書籍情報を再取得できませんでした。');
 
     const updates = {
-      seriesTitle: metadata.seriesTitle,
-      volumeNumber: metadata.volumeNumber,
+      seriesTitle: options.preserveIdentity ? book.seriesTitle : metadata.seriesTitle,
+      volumeNumber: options.preserveIdentity ? book.volumeNumber : metadata.volumeNumber,
       author: metadata.author ?? book.author,
       publisher: metadata.publisher ?? book.publisher,
       thumbnailUrl: metadata.thumbnailUrl ?? book.thumbnailUrl,

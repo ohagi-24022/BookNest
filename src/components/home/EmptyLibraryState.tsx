@@ -48,7 +48,7 @@ export function EmptyLibraryState({
         ISBNバーコードから書籍情報を自動入力できます。{'\n'}
         バーコードがない本は手動登録もできます。
       </Text>
-      <Link href="/scan" asChild>
+      <Link href="/(tabs)/scan" asChild>
         <Pressable style={[styles.action, { backgroundColor: colors.text }]}>
           <Ionicons color={colors.background} name="barcode-outline" size={19} />
           <Text style={[styles.actionText, { color: colors.background }]}>本を登録する</Text>

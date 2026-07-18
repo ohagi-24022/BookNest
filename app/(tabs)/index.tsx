@@ -60,7 +60,6 @@ type SeriesStats = {
 };
 
 export const SERIES_PUBLICATION_STORAGE_KEY = 'booknest.series-publication.v1';
-
 const filterOptions: Array<{ label: string; value: HomeFilter }> = [
   { label: 'すべて', value: 'all' },
   { label: '未読', value: 'unread' },
@@ -551,7 +550,7 @@ export default function HomeScreen() {
     setRefreshingSeriesTitle(seriesTitle);
     const representativeTarget = findRepresentativeRefreshTarget(books, seriesTitle);
     const refreshRepresentativeCover = representativeTarget
-      ? repairBookMetadata(representativeTarget.id).catch((metadataError) => {
+      ? repairBookMetadata(representativeTarget.id, { preserveIdentity: true }).catch((metadataError) => {
           console.warn('Failed to refresh representative cover', metadataError);
         })
       : Promise.resolve();
@@ -707,7 +706,7 @@ export default function HomeScreen() {
               return (
                 <Pressable
                   accessibilityLabel={`${item.title}の詳細を開く`}
-                  onPress={() => router.push(`/series/${encodeURIComponent(item.title)}`)}
+                  onPress={() => router.navigate(`/(tabs)/series/${encodeURIComponent(item.title)}`)}
                   style={[styles.coverTile, { width: coverTileWidth }]}
                 >
                   <BookCover
@@ -723,7 +722,7 @@ export default function HomeScreen() {
                 <View style={[styles.titleRow, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                   <Pressable
                     accessibilityLabel={`${item.title}の詳細を開く`}
-                    onPress={() => router.push(`/series/${encodeURIComponent(item.title)}`)}
+                    onPress={() => router.navigate(`/(tabs)/series/${encodeURIComponent(item.title)}`)}
                     style={styles.titleRowBody}
                   >
                     <Text numberOfLines={1} style={[styles.titleRowText, { color: colors.text }]}>
@@ -748,8 +747,7 @@ export default function HomeScreen() {
                         size={17}
                       />
                     </TouchableOpacity>
-                    {showPublishedLatestVolume && (
-                      <TouchableOpacity
+                    <TouchableOpacity
                         accessibilityLabel={`${item.title}の刊行情報を更新`}
                         activeOpacity={0.75}
                         disabled={refreshingSeriesTitle !== null}
@@ -765,8 +763,7 @@ export default function HomeScreen() {
                           name={refreshingSeriesTitle === item.title ? 'hourglass-outline' : 'refresh'}
                           size={16}
                         />
-                      </TouchableOpacity>
-                    )}
+                    </TouchableOpacity>
                   </View>
                 </View>
               );

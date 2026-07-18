@@ -18,9 +18,11 @@ export type RankingDisplayRow = {
   averageScore?: number;
   coverUrl?: string;
   favoriteCount?: number;
+  isbn?: string;
   ownedVolumeCount?: number;
   ownerCount?: number;
   popularityScore?: number;
+  preferIsbnCover?: boolean;
   score?: number;
   title: string;
   wantCount?: number;

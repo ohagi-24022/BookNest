@@ -1,11 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useFocusEffect } from '@react-navigation/native';
 import * as WebBrowser from 'expo-web-browser';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
+  InteractionManager,
   Linking,
   Pressable,
   StyleSheet,
@@ -15,6 +17,7 @@ import {
 } from 'react-native';
 
 import { BookCover } from '../../src/components/BookCover';
+import { EdgeSwipeBack } from '../../src/components/EdgeSwipeBack';
 import { buildPurchaseUrl, lookupBookByTitle, SeriesPublicationInfo } from '../../src/lib/bookApis';
 import { migrateNewReleaseSeriesSubscription } from '../../src/lib/newReleaseNotifications';
 import { normalizeSeriesKey } from '../../src/lib/series';
@@ -23,7 +26,7 @@ import { useAuth } from '../../src/store/AuthContext';
 import { useLibrary } from '../../src/store/LibraryContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 import { useWishlist } from '../../src/store/WishlistContext';
-import { Book, MissingBook, ReadingStatus, ShelfItem } from '../../src/types';
+import { Book, BookInput, MissingBook, ReadingStatus, ShelfItem } from '../../src/types';
 
 const PAGE_SIZE = 10;
 const SERIES_PUBLICATION_STORAGE_KEY = 'booknest.series-publication.v1';
@@ -113,10 +116,36 @@ export default function SeriesScreen() {
   const selectedCount = selectedIds.length;
   const allSelected = ownedItems.length > 0 && selectedCount === ownedItems.length;
   const favorite = isFavoriteSeries(seriesTitle);
-
+  const resetSeriesView = useCallback((animated = false) => {
+    shouldKeepBottomRef.current = false;
+    setPage(1);
+    setSelectedIds([]);
+    setEditingId(null);
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToOffset({ offset: 0, animated });
+    });
+  }, []);
+  const goBackToShelf = useCallback(() => {
+    if (navigation.canGoBack()) {
+      router.back();
+      return;
+    }
+    router.replace('/(tabs)');
+  }, [navigation, router]);
   useLayoutEffect(() => {
     navigation.setOptions({
       title: seriesTitle,
+      headerLeft: () => (
+        <Pressable
+          accessibilityLabel="本棚に戻る"
+          hitSlop={10}
+          onPress={goBackToShelf}
+          style={styles.headerBackButton}
+        >
+          <Ionicons color={colors.text} name="chevron-back" size={24} />
+          <Text style={[styles.headerBackText, { color: colors.text }]}>戻る</Text>
+        </Pressable>
+      ),
       headerRight: () => (
         <Pressable
           accessibilityLabel={favorite ? 'お気に入りを解除' : 'お気に入りに追加'}
@@ -132,12 +161,29 @@ export default function SeriesScreen() {
         </Pressable>
       ),
     });
-  }, [colors.muted, colors.primary, favorite, navigation, seriesTitle, setFavoriteSeries]);
+  }, [colors.muted, colors.primary, colors.text, favorite, goBackToShelf, navigation, seriesTitle, setFavoriteSeries]);
 
   useEffect(() => {
-    setPage(1);
-    setSelectedIds([]);
-  }, [seriesTitle]);
+    resetSeriesView(false);
+  }, [resetSeriesView, seriesTitle]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      const task = InteractionManager.runAfterInteractions(() => {
+        if (cancelled) return;
+        resetSeriesView(false);
+        requestAnimationFrame(() => {
+          if (!cancelled) listRef.current?.scrollToOffset({ offset: 0, animated: false });
+        });
+      });
+
+      return () => {
+        cancelled = true;
+        task.cancel();
+      };
+    }, [resetSeriesView, seriesTitle]),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -175,6 +221,24 @@ export default function SeriesScreen() {
     );
   };
 
+  const closeInlineEdit = () => {
+    setEditingId(null);
+    setDraftSeries('');
+    setDraftVolume('');
+  };
+
+  const handleRowPress = (item: ShelfItem) => {
+    if (editingId) {
+      closeInlineEdit();
+      return;
+    }
+    if (item.isMissing) {
+      void addMissingAsOwned(item);
+      return;
+    }
+    toggleSelected(item);
+  };
+
   const openPurchaseCandidates = async (item: ShelfItem) => {
     const purchaseUrl = buildPurchaseUrl(item.seriesTitle, item.volumeNumber);
     if (openExternalPurchaseLinks) {
@@ -189,16 +253,30 @@ export default function SeriesScreen() {
     setRefreshingId(item.id);
     try {
       const metadata = await lookupBookByTitle(`${item.seriesTitle} ${item.volumeNumber}巻`);
-      await addBook({
-        isbn: metadata?.isbn,
-        title: metadata?.title ?? item.title,
+      const metadataMatchesExpected =
+        !!metadata &&
+        metadata.volumeNumber === item.volumeNumber &&
+        normalizeSeriesKey(metadata.seriesTitle || item.seriesTitle) === normalizeSeriesKey(item.seriesTitle);
+      const trustedMetadata = metadataMatchesExpected ? metadata : null;
+      const bookInput: BookInput = {
+        isbn: trustedMetadata?.isbn,
+        title: trustedMetadata?.title ?? item.title,
         seriesTitle: item.seriesTitle,
         volumeNumber: item.volumeNumber,
-        author: metadata?.author,
-        publisher: metadata?.publisher,
-        thumbnailUrl: metadata?.thumbnailUrl,
+        author: trustedMetadata?.author,
+        publisher: trustedMetadata?.publisher,
+        thumbnailUrl: trustedMetadata?.thumbnailUrl,
         status: 'unread',
-      });
+      };
+
+      try {
+        await addBook(bookInput);
+      } catch (addError) {
+        if (!bookInput.isbn || !(addError instanceof Error) || !/ISBN|登録済|already/i.test(addError.message)) {
+          throw addError;
+        }
+        await addBook({ ...bookInput, isbn: undefined });
+      }
     } catch (error) {
       Alert.alert('追加できませんでした', error instanceof Error ? error.message : 'もう一度お試しください。');
     } finally {
@@ -269,7 +347,7 @@ export default function SeriesScreen() {
       }
       setRenameOpen(false);
       Alert.alert('シリーズ名を更新しました', `${updatedCount}冊を「${nextTitle}」へ移しました。`);
-      router.replace(`/series/${encodeURIComponent(nextTitle)}`);
+      router.replace(`/(tabs)/series/${encodeURIComponent(nextTitle)}`);
     } catch (error) {
       Alert.alert('BookNest', error instanceof Error ? error.message : 'シリーズ名の更新に失敗しました。');
     }
@@ -346,7 +424,7 @@ export default function SeriesScreen() {
   };
 
   return (
-    <View style={[styles.screen, { backgroundColor: colors.background }]}>
+    <EdgeSwipeBack onBack={goBackToShelf} style={{ backgroundColor: colors.background }}>
       <View style={[styles.bulkBar, { borderBottomColor: colors.border }]}>
         <Text style={[styles.bulkText, { color: colors.muted }]}>{selectedCount}冊選択中</Text>
         <Pressable
@@ -427,6 +505,7 @@ export default function SeriesScreen() {
       )}
 
       <FlatList
+        key={normalizeSeriesKey(seriesTitle)}
         ref={listRef}
         data={pageItems}
         keyExtractor={(item) => item.id}
@@ -463,7 +542,7 @@ export default function SeriesScreen() {
 
           return (
             <Pressable
-              onPress={() => (missing ? void addMissingAsOwned(item) : toggleSelected(item))}
+              onPress={() => handleRowPress(item)}
               onLongPress={() => isOwnedBook(item) && startEditing(item)}
               style={[
                 styles.row,
@@ -475,6 +554,10 @@ export default function SeriesScreen() {
                 accessibilityLabel={selected ? `${item.title}の選択を解除` : `${item.title}を選択`}
                 onPress={(event) => {
                   event.stopPropagation();
+                  if (editingId) {
+                    closeInlineEdit();
+                    return;
+                  }
                   if (missing) void addMissingAsOwned(item);
                   else toggleSelected(item);
                 }}
@@ -587,7 +670,10 @@ export default function SeriesScreen() {
                       accessibilityLabel={`${item.title}の詳細を見る`}
                       onPress={(event) => {
                         event.stopPropagation();
-                        router.push(`/book/${encodeURIComponent(item.id)}`);
+                        router.push({
+                          pathname: '/(tabs)/book/[id]',
+                          params: { fromSeries: seriesTitle, id: item.id },
+                        });
                       }}
                       style={[styles.iconActionButton, { borderColor: colors.primary }]}
                     >
@@ -621,7 +707,7 @@ export default function SeriesScreen() {
           );
         }}
       />
-    </View>
+    </EdgeSwipeBack>
   );
 }
 
@@ -726,6 +812,14 @@ function Pagination({
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  headerBackButton: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 2,
+    minHeight: 36,
+    paddingRight: 8,
+  },
+  headerBackText: { fontSize: 15, fontWeight: '800' },
   bulkBar: {
     alignItems: 'center',
     borderBottomWidth: 1,

@@ -51,6 +51,7 @@ export default function WishlistScreen() {
   const [editingTitle, setEditingTitle] = useState('');
   const [editingNote, setEditingNote] = useState('');
   const [lastDeleted, setLastDeleted] = useState<WishlistItem | null>(null);
+  const [editMode, setEditMode] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const tabScrollToTopRef = useRef({
     scrollToTop: () => scrollRef.current?.scrollTo({ y: 0, animated: true }),
@@ -120,6 +121,7 @@ export default function WishlistScreen() {
   };
 
   const startEditing = (item: WishlistItem) => {
+    setEditMode(true);
     setEditingId(item.id);
     setEditingTitle(item.title);
     setEditingNote(item.note ?? '');
@@ -152,37 +154,59 @@ export default function WishlistScreen() {
     setLastDeleted(null);
   };
 
-  return (
-    <ScrollView
-      ref={scrollRef}
-      style={[styles.screen, { backgroundColor: colors.background }]}
-      contentContainerStyle={styles.content}
-    >
-      <View style={styles.header}>
-        <Text style={[styles.title, { color: colors.text }]}>欲しい漫画</Text>
-        <Text style={[styles.copy, { color: colors.muted }]}>
-          タイトルを入れて優先度を選ぶだけで、購入候補として残せます。
-        </Text>
-      </View>
+  const toggleEditMode = () => {
+    setEditMode((current) => {
+      const next = !current;
+      if (!next) {
+        setEditingId(null);
+        setEditingTitle('');
+        setEditingNote('');
+        setMemoOpen(false);
+      }
+      return next;
+    });
+  };
 
-      <View style={[styles.overview, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-        <View style={styles.overviewMain}>
-          <View style={[styles.overviewIcon, { backgroundColor: colors.text }]}>
-            <Ionicons color={colors.background} name="cart-outline" size={22} />
-          </View>
-          <View style={styles.overviewText}>
-            <Text style={[styles.overviewTitle, { color: colors.text }]}>次に買いたい本を整理</Text>
+  return (
+    <View style={[styles.screen, { backgroundColor: colors.background }]}>
+      <ScrollView
+        ref={scrollRef}
+        style={styles.screen}
+        contentContainerStyle={styles.content}
+        stickyHeaderIndices={[0]}
+      >
+        <View style={[styles.headerShell, { backgroundColor: colors.background }]}>
+          <View style={styles.header}>
+            <View style={styles.headerTitleRow}>
+              <Text style={[styles.title, { color: colors.text }]}>欲しい漫画</Text>
+              <Pressable
+                accessibilityLabel={editMode ? '編集モードを終了' : '編集モードを開始'}
+                onPress={toggleEditMode}
+                style={[
+                  styles.headerEditButton,
+                  {
+                    backgroundColor: editMode ? colors.text : colors.surface,
+                    borderColor: editMode ? colors.text : colors.border,
+                  },
+                ]}
+              >
+                <Ionicons
+                  color={editMode ? colors.background : colors.text}
+                  name={editMode ? 'checkmark' : 'create-outline'}
+                  size={17}
+                />
+                <Text style={[styles.editModeText, { color: editMode ? colors.background : colors.text }]}>
+                  {editMode ? '完了' : '編集'}
+                </Text>
+              </Pressable>
+            </View>
             <Text style={[styles.copy, { color: colors.muted }]}>
-              優先度を付けておくと、セールや書店で迷いにくくなります。
+              {editMode
+                ? 'リスト内の編集、削除、スコア調整に集中できます。'
+                : '購入候補を眺めながら、思いついた作品をすぐ追加できます。'}
             </Text>
           </View>
         </View>
-        <View style={styles.statRow}>
-          <StatBox label="候補" value={`${items.length}`} />
-          <StatBox label="最優先" value={`${highPriorityCount}`} />
-          <StatBox label="平均" value={items.length > 0 ? `${averageScore}点` : '-'} />
-        </View>
-      </View>
 
       <View style={[styles.quickAdd, { backgroundColor: colors.elevated }]}>
         <View style={styles.inputRow}>
@@ -245,7 +269,28 @@ export default function WishlistScreen() {
         ) : null}
       </View>
 
-      {lastDeleted ? (
+      {!editMode ? (
+        <View style={[styles.overview, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={styles.overviewMain}>
+            <View style={[styles.overviewIcon, { backgroundColor: colors.text }]}>
+              <Ionicons color={colors.background} name="cart-outline" size={22} />
+            </View>
+            <View style={styles.overviewText}>
+              <Text style={[styles.overviewTitle, { color: colors.text }]}>次に買いたい本を整理</Text>
+              <Text style={[styles.copy, { color: colors.muted }]}>
+                優先度を付けておくと、セールや書店で迷いにくくなります。
+              </Text>
+            </View>
+          </View>
+          <View style={styles.statRow}>
+            <StatBox label="候補" value={`${items.length}`} />
+            <StatBox label="最優先" value={`${highPriorityCount}`} />
+            <StatBox label="平均" value={items.length > 0 ? `${averageScore}点` : '-'} />
+          </View>
+        </View>
+      ) : null}
+
+      {editMode && lastDeleted ? (
         <View style={[styles.undoBar, { backgroundColor: colors.elevated, borderColor: colors.border }]}>
           <Text style={[styles.copyStrong, { color: colors.text }]} numberOfLines={1}>
             {lastDeleted.title}を削除しました
@@ -256,7 +301,7 @@ export default function WishlistScreen() {
         </View>
       ) : null}
 
-      {topItems.length > 0 ? (
+      {!editMode && topItems.length > 0 ? (
         <View style={styles.topSection}>
           <View style={styles.sectionTitleRow}>
             <Text style={[styles.summaryTitle, { color: colors.text }]}>今の上位候補</Text>
@@ -314,7 +359,12 @@ export default function WishlistScreen() {
       ) : (
         <View style={styles.list}>
           {items.map((item, index) => (
-            <View key={item.id} style={[styles.card, { borderColor: colors.border }]}>
+            <Pressable
+              accessibilityLabel={`${item.title}を長押しして編集`}
+              key={item.id}
+              onLongPress={() => startEditing(item)}
+              style={[styles.card, { borderColor: colors.border }]}
+            >
               <View style={styles.cardHeader}>
                 <Text style={[styles.rankText, { color: colors.text }]}>#{index + 1}</Text>
                 <BookCover
@@ -334,7 +384,7 @@ export default function WishlistScreen() {
                 </View>
               </View>
 
-              {editingId === item.id ? (
+              {editMode && editingId === item.id ? (
                 <View style={styles.editBox}>
                   <TextInput
                     onChangeText={setEditingTitle}
@@ -376,42 +426,48 @@ export default function WishlistScreen() {
                   <Ionicons color={colors.text} name="open-outline" size={16} />
                   <Text style={[styles.smallButtonText, { color: colors.text }]}>購入候補</Text>
                 </Pressable>
-                <Pressable
-                  accessibilityLabel={`${item.title}を編集`}
-                  onPress={() => startEditing(item)}
-                  style={[styles.iconButton, { borderColor: colors.border }]}
-                >
-                  <Ionicons color={colors.text} name="create-outline" size={16} />
-                </Pressable>
-                <View style={styles.scoreButtons}>
-                  <Pressable
-                    accessibilityLabel={`${item.title}の優先度を上げる`}
-                    onPress={() => updateItem(item.id, { score: item.score + 5 })}
-                    style={[styles.iconButton, { borderColor: colors.border }]}
-                  >
-                    <Ionicons color={colors.text} name="arrow-up" size={16} />
-                  </Pressable>
-                  <Pressable
-                    accessibilityLabel={`${item.title}の優先度を下げる`}
-                    onPress={() => updateItem(item.id, { score: item.score - 5 })}
-                    style={[styles.iconButton, { borderColor: colors.border }]}
-                  >
-                    <Ionicons color={colors.text} name="arrow-down" size={16} />
-                  </Pressable>
-                </View>
-                <Pressable
-                  accessibilityLabel={`${item.title}を削除`}
-                  onPress={() => removeItem(item)}
-                  style={[styles.iconButton, { borderColor: colors.danger }]}
-                >
-                  <Ionicons color={colors.danger} name="trash-outline" size={16} />
-                </Pressable>
+                {editMode ? (
+                  <>
+                    <Pressable
+                      accessibilityLabel={`${item.title}を編集`}
+                      onPress={() => startEditing(item)}
+                      style={[styles.iconButton, { borderColor: colors.border }]}
+                    >
+                      <Ionicons color={colors.text} name="create-outline" size={16} />
+                    </Pressable>
+                    <View style={styles.scoreButtons}>
+                      <Pressable
+                        accessibilityLabel={`${item.title}の優先度を上げる`}
+                        onPress={() => updateItem(item.id, { score: item.score + 5 })}
+                        style={[styles.iconButton, { borderColor: colors.border }]}
+                      >
+                        <Ionicons color={colors.text} name="arrow-up" size={16} />
+                      </Pressable>
+                      <Pressable
+                        accessibilityLabel={`${item.title}の優先度を下げる`}
+                        onPress={() => updateItem(item.id, { score: item.score - 5 })}
+                        style={[styles.iconButton, { borderColor: colors.border }]}
+                      >
+                        <Ionicons color={colors.text} name="arrow-down" size={16} />
+                      </Pressable>
+                    </View>
+                    <Pressable
+                      accessibilityLabel={`${item.title}を削除`}
+                      onPress={() => removeItem(item)}
+                      style={[styles.iconButton, { borderColor: colors.danger }]}
+                    >
+                      <Ionicons color={colors.danger} name="trash-outline" size={16} />
+                    </Pressable>
+                  </>
+                ) : null}
               </View>
-            </View>
+            </Pressable>
           ))}
         </View>
       )}
-    </ScrollView>
+      </ScrollView>
+
+    </View>
   );
 }
 
@@ -428,9 +484,22 @@ function StatBox({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  content: { gap: 16, padding: 18, paddingBottom: 40 },
-  header: { gap: 4 },
+  content: { gap: 16, padding: 18, paddingBottom: 40, paddingTop: 24 },
+  headerShell: { marginHorizontal: -18, marginTop: -24, paddingHorizontal: 18, paddingTop: 24, zIndex: 10 },
+  header: { gap: 4, paddingBottom: 10 },
+  headerTitleRow: { alignItems: 'center', flexDirection: 'row', gap: 12, justifyContent: 'space-between' },
   title: { fontSize: 24, fontWeight: '900' },
+  headerEditButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 5,
+    height: 38,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  editModeText: { fontSize: 13, fontWeight: '900' },
   copy: { fontSize: 13, lineHeight: 18 },
   copyStrong: { fontSize: 13, fontWeight: '800', lineHeight: 18 },
   overview: { borderRadius: 8, borderWidth: 1, gap: 14, padding: 14 },

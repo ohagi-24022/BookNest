@@ -1,8 +1,9 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Stack, useLocalSearchParams } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { Stack, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { EdgeSwipeBack } from '../../src/components/EdgeSwipeBack';
 import { RankingCard } from '../../src/components/RankingCard';
 import { buildPurchaseUrl } from '../../src/lib/bookApis';
 import {
@@ -11,13 +12,21 @@ import {
   RankingCategory,
   rankingCategoryLabels,
 } from '../../src/lib/rankings';
+import { normalizeSeriesKey } from '../../src/lib/series';
+import { buildSeriesGroups } from '../../src/lib/seriesSelectors';
 import { supabase } from '../../src/lib/supabase';
 import { isMissingSupabaseFunctionError } from '../../src/lib/supabaseErrors';
 import { useAuth } from '../../src/store/AuthContext';
+import { useLibrary } from '../../src/store/LibraryContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 import { useWishlist } from '../../src/store/WishlistContext';
 
 const PAGE_SIZE = 10;
+
+type LocalSeriesCover = {
+  coverUrl?: string;
+  isbn?: string;
+};
 
 function parseCategory(value: string | string[] | undefined): RankingCategory {
   const category = Array.isArray(value) ? value[0] : value;
@@ -29,7 +38,10 @@ export default function RankingCategoryScreen() {
   const { category: rawCategory } = useLocalSearchParams();
   const category = parseCategory(rawCategory);
   const { colors } = useAppTheme();
+  const navigation = useNavigation();
+  const router = useRouter();
   const { user } = useAuth();
+  const { books } = useLibrary();
   const { addItem, items } = useWishlist();
   const [globalRows, setGlobalRows] = useState<GlobalRankingRow[]>([]);
   const [globalFavoriteRows, setGlobalFavoriteRows] = useState<GlobalRankingRow[]>([]);
@@ -38,9 +50,33 @@ export default function RankingCategoryScreen() {
   const [page, setPage] = useState(1);
   const label = rankingCategoryLabels[category];
 
+  const localSeriesCoverByKey = useMemo(
+    () =>
+      new Map(
+        buildSeriesGroups(books)
+          .filter((group) => !!group.representative.thumbnailUrl || !!group.representative.isbn)
+          .map((group) => [
+            normalizeLooseSeriesKey(group.title),
+            {
+              coverUrl: group.representative.thumbnailUrl,
+              isbn: group.representative.isbn,
+            } satisfies LocalSeriesCover,
+          ]),
+      ),
+    [books],
+  );
   const rows = useMemo(
-    () => buildRankingRows(category, category === 'favorite' ? globalFavoriteRows : globalRows, items),
-    [category, globalFavoriteRows, globalRows, items],
+    () =>
+      buildRankingRows(category, category === 'favorite' ? globalFavoriteRows : globalRows, items).map((row) => {
+        const localCover = resolveLocalSeriesCover(row.title, localSeriesCoverByKey);
+        return {
+          ...row,
+          ...localCover,
+          coverUrl: localCover?.coverUrl ?? row.coverUrl,
+          preferIsbnCover: !!localCover?.isbn && !localCover.coverUrl,
+        };
+      }),
+    [category, globalFavoriteRows, globalRows, items, localSeriesCoverByKey],
   );
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageRows = useMemo(
@@ -48,6 +84,24 @@ export default function RankingCategoryScreen() {
     [page, rows],
   );
   const addedTitles = useMemo(() => new Set(items.map((item) => normalizeRankingTitle(item.title))), [items]);
+  const goBackToRanking = useCallback(() => {
+    router.replace('/(tabs)/ranking');
+  }, [router]);
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerLeft: () => (
+        <Pressable
+          accessibilityLabel="順位に戻る"
+          hitSlop={10}
+          onPress={goBackToRanking}
+          style={styles.headerBackButton}
+        >
+          <Ionicons color={colors.text} name="chevron-back" size={24} />
+          <Text style={[styles.headerBackText, { color: colors.text }]}>戻る</Text>
+        </Pressable>
+      ),
+    });
+  }, [colors.text, goBackToRanking, navigation]);
 
   const loadRankings = async () => {
     if (category === 'personal') {
@@ -103,10 +157,10 @@ export default function RankingCategoryScreen() {
   }, [pageCount]);
 
   return (
-    <>
+    <EdgeSwipeBack onBack={goBackToRanking} style={{ backgroundColor: colors.background }}>
       <Stack.Screen options={{ title: label.title }} />
       <ScrollView
-        style={[styles.screen, { backgroundColor: colors.background }]}
+        style={styles.screen}
         contentContainerStyle={styles.content}
         refreshControl={
           <RefreshControl refreshing={loading} onRefresh={() => void loadRankings()} tintColor={colors.text} />
@@ -161,7 +215,7 @@ export default function RankingCategoryScreen() {
           </View>
         )}
       </ScrollView>
-    </>
+    </EdgeSwipeBack>
   );
 }
 
@@ -217,6 +271,17 @@ function normalizeRankingTitle(value: string) {
   return value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+function normalizeLooseSeriesKey(value: string) {
+  return normalizeSeriesKey(value).replace(/[!！?？。．.・･]/g, '');
+}
+
+function resolveLocalSeriesCover(title: string, covers: Map<string, LocalSeriesCover>) {
+  const key = normalizeLooseSeriesKey(title);
+  const exact = covers.get(key);
+  if (exact) return exact;
+  return [...covers.entries()].find(([candidateKey]) => candidateKey.includes(key) || key.includes(candidateKey))?.[1];
+}
+
 function EmptyState({
   icon,
   text,
@@ -236,6 +301,14 @@ function EmptyState({
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  headerBackButton: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 2,
+    minHeight: 36,
+    paddingRight: 8,
+  },
+  headerBackText: { fontSize: 15, fontWeight: '800' },
   content: { gap: 16, padding: 18, paddingBottom: 40 },
   header: { gap: 6 },
   titleRow: { alignItems: 'flex-start', flexDirection: 'row', gap: 12 },

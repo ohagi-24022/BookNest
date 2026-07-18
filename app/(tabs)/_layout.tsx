@@ -110,6 +110,13 @@ export default function TabLayout() {
           ),
         }}
       />
+      <Tabs.Screen name="series/[title]" options={{ href: null, title: 'シリーズ' }} />
+      <Tabs.Screen name="book/[id]" options={{ href: null, title: '巻の情報' }} />
+      <Tabs.Screen name="help" options={{ href: null, title: 'ヘルプ' }} />
+      <Tabs.Screen name="account" options={{ href: null, title: 'ユーザー' }} />
+      <Tabs.Screen name="notifications" options={{ href: null, title: '新刊通知' }} />
+      <Tabs.Screen name="ranking/[category]" options={{ href: null, title: 'ランキング' }} />
+      <Tabs.Screen name="privacy" options={{ href: null, title: 'プライバシーポリシー' }} />
     </Tabs>
   );
 }

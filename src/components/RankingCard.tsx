@@ -43,6 +43,8 @@ export function RankingCard({
     >
       <Text style={[styles.rank, { color: colors.text }]}>#{index + 1}</Text>
       <BookCover
+        isbn={row.isbn}
+        preferIsbnCover={row.preferIsbnCover}
         thumbnailUrl={row.coverUrl}
         placeholderText="No Cover"
         style={compact ? styles.compactCover : styles.wideCover}

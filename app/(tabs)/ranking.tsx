@@ -13,15 +13,24 @@ import {
   rankingCategories,
   rankingCategoryLabels,
 } from '../../src/lib/rankings';
+import { buildSeriesGroups } from '../../src/lib/seriesSelectors';
+import { normalizeSeriesKey } from '../../src/lib/series';
 import { supabase } from '../../src/lib/supabase';
 import { isMissingSupabaseFunctionError } from '../../src/lib/supabaseErrors';
 import { useAuth } from '../../src/store/AuthContext';
+import { useLibrary } from '../../src/store/LibraryContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 import { useWishlist } from '../../src/store/WishlistContext';
+
+type LocalSeriesCover = {
+  coverUrl?: string;
+  isbn?: string;
+};
 
 export default function RankingScreen() {
   const { colors } = useAppTheme();
   const { user } = useAuth();
+  const { books } = useLibrary();
   const { addItem, items } = useWishlist();
   const [globalRows, setGlobalRows] = useState<GlobalRankingRow[]>([]);
   const [globalFavoriteRows, setGlobalFavoriteRows] = useState<GlobalRankingRow[]>([]);
@@ -33,15 +42,38 @@ export default function RankingScreen() {
     scrollToTop: () => scrollRef.current?.scrollTo({ y: 0, animated: true }),
   });
   const addedTitles = useMemo(() => new Set(items.map((item) => normalizeRankingTitle(item.title))), [items]);
+  const localSeriesCoverByKey = useMemo(
+    () =>
+      new Map(
+        buildSeriesGroups(books)
+          .filter((group) => !!group.representative.thumbnailUrl || !!group.representative.isbn)
+          .map((group) => [
+            normalizeLooseSeriesKey(group.title),
+            {
+              coverUrl: group.representative.thumbnailUrl,
+              isbn: group.representative.isbn,
+            } satisfies LocalSeriesCover,
+          ]),
+      ),
+    [books],
+  );
   useScrollToTop(tabScrollToTopRef);
   const sections = useMemo(
     () =>
       rankingCategories.map((category) => ({
         category,
-        rows: buildRankingRows(category, category === 'favorite' ? globalFavoriteRows : globalRows, items),
+        rows: buildRankingRows(category, category === 'favorite' ? globalFavoriteRows : globalRows, items).map((row) => {
+          const localCover = resolveLocalSeriesCover(row.title, localSeriesCoverByKey);
+          return {
+            ...row,
+            ...localCover,
+            coverUrl: localCover?.coverUrl ?? row.coverUrl,
+            preferIsbnCover: !!localCover?.isbn && !localCover.coverUrl,
+          };
+        }),
         ...rankingCategoryLabels[category],
       })),
-    [globalFavoriteRows, globalRows, items],
+    [globalFavoriteRows, globalRows, items, localSeriesCoverByKey],
   );
 
   const loadRankings = async () => {
@@ -190,7 +222,7 @@ function RankingShelf({
           {rows.length > 10 ? (
             <Pressable
               accessibilityLabel={`${title}をもっと見る`}
-              onPress={() => router.push(`/ranking/${category}`)}
+              onPress={() => router.push(`/(tabs)/ranking/${category}`)}
               style={[styles.moreTailCard, { borderColor: colors.border }]}
             >
               <Ionicons color={colors.text} name="chevron-forward-circle-outline" size={24} />
@@ -206,6 +238,17 @@ function RankingShelf({
 
 function normalizeRankingTitle(value: string) {
   return value.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function normalizeLooseSeriesKey(value: string) {
+  return normalizeSeriesKey(value).replace(/[!！?？。．.・･]/g, '');
+}
+
+function resolveLocalSeriesCover(title: string, covers: Map<string, LocalSeriesCover>) {
+  const key = normalizeLooseSeriesKey(title);
+  const exact = covers.get(key);
+  if (exact) return exact;
+  return [...covers.entries()].find(([candidateKey]) => candidateKey.includes(key) || key.includes(candidateKey))?.[1];
 }
 
 function EmptyState({

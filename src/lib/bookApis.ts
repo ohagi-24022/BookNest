@@ -491,11 +491,19 @@ function findLatestVolumeFromTitles(titles: Array<string | undefined>, seriesTit
         !!parsed?.volumeNumber &&
         parsed.volumeNumber > 0 &&
         parsed.volumeNumber <= 500 &&
-        normalizeSeriesKey(parsed.seriesTitle) === expectedKey,
+        isSeriesKeyCandidate(normalizeSeriesKey(parsed.seriesTitle), expectedKey),
     )
     .map((parsed) => parsed.volumeNumber);
 
   return volumes.length > 0 ? Math.max(...volumes) : null;
+}
+
+function isSeriesKeyCandidate(candidateKey: string, expectedKey: string) {
+  if (!candidateKey || !expectedKey) return false;
+  if (candidateKey === expectedKey) return true;
+  if (candidateKey.length >= 4 && expectedKey.includes(candidateKey)) return true;
+  if (expectedKey.length >= 4 && candidateKey.includes(expectedKey)) return true;
+  return false;
 }
 
 function findSeriesCompletionFromTitles(titles: Array<string | undefined>, latestVolume: number | null) {
@@ -503,6 +511,18 @@ function findSeriesCompletionFromTitles(titles: Array<string | undefined>, lates
     if (!title) return false;
     const normalizedTitle = title.normalize('NFKC');
     if (/完結|完結版|完結セット|最終巻|最終回|全巻|全巻セット|全\s*\d+\s*巻/.test(normalizedTitle)) return true;
+    const allVolumeMatch = normalizedTitle.match(/全\s*(\d+)\s*巻/);
+    return !!allVolumeMatch && !!latestVolume && Number(allVolumeMatch[1]) === latestVolume;
+  });
+}
+
+function hasSeriesCompletionHint(titles: Array<string | undefined>, latestVolume: number | null) {
+  return titles.some((title) => {
+    if (!title) return false;
+    const normalizedTitle = title.normalize('NFKC');
+    if (/完結|完結版|完結セット|最終巻|最終回|全巻|全巻セット|全\s*\d+\s*巻/.test(normalizedTitle)) {
+      return true;
+    }
     const allVolumeMatch = normalizedTitle.match(/全\s*(\d+)\s*巻/);
     return !!allVolumeMatch && !!latestVolume && Number(allVolumeMatch[1]) === latestVolume;
   });
@@ -558,7 +578,7 @@ async function lookupRakutenCompletionHint(seriesTitle: string, latestVolume: nu
     if (!response.ok) continue;
 
     const payload = (await response.json()) as RakutenBooksResponse;
-    if (findSeriesCompletionFromTitles(rakutenItemsToCompletionTexts(payload.Items), latestVolume)) {
+    if (hasSeriesCompletionHint(rakutenItemsToCompletionTexts(payload.Items), latestVolume)) {
       return true;
     }
   }
@@ -595,7 +615,7 @@ async function lookupGoogleCompletionHint(seriesTitle: string, latestVolume: num
       item.volumeInfo?.subtitle,
       item.volumeInfo?.description,
     ]);
-    if (findSeriesCompletionFromTitles(titles, latestVolume)) return true;
+    if (hasSeriesCompletionHint(titles, latestVolume)) return true;
   }
 
   return false;
@@ -617,54 +637,76 @@ async function lookupSeriesCompletionHint(seriesTitle: string, latestVolume: num
 async function lookupLatestRakutenSeriesVolume(seriesTitle: string) {
   if (!supabase) return null;
 
-  const searchParams = new URLSearchParams({
-    title: seriesTitle,
-    hits: '30',
-    sort: '-releaseDate',
-    outOfStockFlag: '1',
-    size: '9',
-  });
-  const path = 'BooksBook/Search/20170404';
-  const response = await fetchRakutenWithTimeout(
-    `https://openapi.rakuten.co.jp/services/api/${path}?${searchParams.toString()}`,
-    { path, params: Object.fromEntries(searchParams.entries()) },
-  );
-  if (!response.ok) return null;
+  const searches = [
+    { path: 'BooksBook/Search/20170404', paramName: 'title', keyword: seriesTitle },
+    { path: 'BooksTotal/Search/20170404', paramName: 'keyword', keyword: seriesTitle },
+    { path: 'BooksBook/Search/20170404', paramName: 'title', keyword: `${seriesTitle} 巻` },
+    { path: 'BooksTotal/Search/20170404', paramName: 'keyword', keyword: `${seriesTitle} 巻` },
+    { path: 'BooksTotal/Search/20170404', paramName: 'keyword', keyword: `${seriesTitle} コミック` },
+  ];
 
-  const payload = (await response.json()) as RakutenBooksResponse;
-  const titles = rakutenItemsToTitleTexts(payload.Items);
-  const latestVolume = findLatestVolumeFromTitles(titles, seriesTitle);
-  return latestVolume
-    ? {
-        isCompleted: findSeriesCompletionFromTitles(titles, latestVolume),
+  for (const search of searches) {
+    const searchParams = new URLSearchParams({
+      [search.paramName]: search.keyword,
+      hits: '30',
+      sort: '-releaseDate',
+      outOfStockFlag: '1',
+      size: '9',
+    });
+    const response = await fetchRakutenWithTimeout(
+      `https://openapi.rakuten.co.jp/services/api/${search.path}?${searchParams.toString()}`,
+      { path: search.path, params: Object.fromEntries(searchParams.entries()) },
+    );
+    if (!response.ok) continue;
+
+    const payload = (await response.json()) as RakutenBooksResponse;
+    const titles = rakutenItemsToTitleTexts(payload.Items);
+    const latestVolume = findLatestVolumeFromTitles(titles, seriesTitle);
+    if (latestVolume) {
+      return {
+        isCompleted: hasSeriesCompletionHint(titles, latestVolume),
         latestVolume,
-      }
-    : null;
+      };
+    }
+  }
+
+  return null;
 }
 
 async function lookupLatestGoogleSeriesVolume(seriesTitle: string) {
-  const params = new URLSearchParams({
-    q: `intitle:${seriesTitle}`,
-    maxResults: '40',
-    orderBy: 'newest',
-    printType: 'books',
-  });
-  if (env.googleBooksApiKey) params.set('key', env.googleBooksApiKey);
+  const queries = [
+    `intitle:${seriesTitle}`,
+    `"${seriesTitle}"`,
+    `${seriesTitle} 巻`,
+    `${seriesTitle} コミック`,
+  ];
 
-  const response = await fetchWithTimeout(
-    `https://www.googleapis.com/books/v1/volumes?${params.toString()}`,
-  );
-  if (!response.ok) return null;
+  for (const query of queries) {
+    const params = new URLSearchParams({
+      q: query,
+      maxResults: '40',
+      orderBy: 'newest',
+      printType: 'books',
+    });
+    if (env.googleBooksApiKey) params.set('key', env.googleBooksApiKey);
 
-  const payload = (await response.json()) as GoogleBooksResponse;
-  const titles = googleBookItems(payload).map((item) => item.volumeInfo?.title);
-  const latestVolume = findLatestVolumeFromTitles(titles, seriesTitle);
-  return latestVolume
-    ? {
-        isCompleted: findSeriesCompletionFromTitles(titles, latestVolume),
+    const response = await fetchWithTimeout(
+      `https://www.googleapis.com/books/v1/volumes?${params.toString()}`,
+    );
+    if (!response.ok) continue;
+
+    const payload = (await response.json()) as GoogleBooksResponse;
+    const titles = googleBookItems(payload).flatMap((item) => [item.volumeInfo?.title, item.volumeInfo?.subtitle]);
+    const latestVolume = findLatestVolumeFromTitles(titles, seriesTitle);
+    if (latestVolume) {
+      return {
+        isCompleted: hasSeriesCompletionHint(titles, latestVolume),
         latestVolume,
-      }
-    : null;
+      };
+    }
+  }
+
+  return null;
 }
 
 export async function lookupLatestSeriesPublication(

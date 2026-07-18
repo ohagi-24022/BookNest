@@ -9,6 +9,7 @@ type BookCoverProps = {
   style?: StyleProp<ImageStyle>;
   missing?: boolean;
   placeholderText?: string;
+  preferIsbnCover?: boolean;
 };
 
 function normalizeImageUrl(url?: string) {
@@ -51,18 +52,23 @@ export function BookCover({
   style,
   missing = false,
   placeholderText = 'No Cover',
+  preferIsbnCover = false,
 }: BookCoverProps) {
   const { colors } = useAppTheme();
   const candidates = useMemo(
-    () =>
-      uniqueUrls([
+    () => {
+      const normalizedThumbnail =
         isGeneratedGoogleIsbnCoverUrl(thumbnailUrl) || isKnownUnavailableCoverUrl(thumbnailUrl)
           ? undefined
-          : normalizeImageUrl(thumbnailUrl),
-        buildRakutenCoverUrl(isbn),
-        buildOpenLibraryCoverUrl(isbn),
-      ]),
-    [isbn, thumbnailUrl],
+          : normalizeImageUrl(thumbnailUrl);
+      const isbnCandidates = [buildRakutenCoverUrl(isbn), buildOpenLibraryCoverUrl(isbn)];
+      return uniqueUrls(
+        preferIsbnCover
+          ? [...isbnCandidates, normalizedThumbnail]
+          : [normalizedThumbnail, ...isbnCandidates],
+      );
+    },
+    [isbn, preferIsbnCover, thumbnailUrl],
   );
   const candidateKey = candidates.join('|');
   const [candidateIndex, setCandidateIndex] = useState(0);

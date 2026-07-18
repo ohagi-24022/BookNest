@@ -300,7 +300,7 @@ export default function SettingsScreen() {
                 <Text style={[styles.rowCopy, { color: colors.muted }]}>{user.email}</Text>
               </View>
             </View>
-            <Link href="/account" asChild>
+            <Link href="/(tabs)/account" asChild>
               <Pressable
                 style={[
                   styles.accountLink,
@@ -474,7 +474,7 @@ export default function SettingsScreen() {
 
       <View style={[styles.section, { borderBottomColor: colors.border }]}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>ヘルプ</Text>
-        <Link href="/help" asChild>
+        <Link href="/(tabs)/help" asChild>
           <Pressable
             style={[
               styles.helpLink,
@@ -538,7 +538,7 @@ export default function SettingsScreen() {
             ? 'シリーズごとの通知ON/OFFは、本棚のシリーズカードから変更できます。'
             : 'ログイン後にONにすると、端末とシリーズ情報を通知用に登録します。'}
         </Text>
-        <Link href="/notifications" asChild>
+        <Link href="/(tabs)/notifications" asChild>
           <Pressable style={[styles.largeNavigationButton, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <View style={[styles.largeNavigationIcon, { backgroundColor: colors.elevated }]}>
               <Ionicons color="#ffcc00" name="notifications" size={22} />
@@ -623,7 +623,7 @@ export default function SettingsScreen() {
 
       <View style={[styles.section, { borderBottomColor: colors.border }]}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>アプリ情報</Text>
-        <Link href="/privacy" asChild>
+        <Link href="/(tabs)/privacy" asChild>
           <Pressable
             style={[
               styles.accountLink,

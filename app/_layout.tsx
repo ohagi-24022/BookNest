@@ -3,6 +3,7 @@ import { router, Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import 'react-native-gesture-handler';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AppSettingsProvider } from '../src/store/AppSettingsContext';
 import { AuthProvider } from '../src/store/AuthContext';
@@ -12,17 +13,19 @@ import { WishlistProvider } from '../src/store/WishlistContext';
 
 export default function RootLayout() {
   return (
-    <ThemeProvider>
-      <AuthProvider>
-        <AppSettingsProvider>
-          <WishlistProvider>
-            <LibraryProvider>
-              <RootStack />
-            </LibraryProvider>
-          </WishlistProvider>
-        </AppSettingsProvider>
-      </AuthProvider>
-    </ThemeProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeProvider>
+        <AuthProvider>
+          <AppSettingsProvider>
+            <WishlistProvider>
+              <LibraryProvider>
+                <RootStack />
+              </LibraryProvider>
+            </WishlistProvider>
+          </AppSettingsProvider>
+        </AuthProvider>
+      </ThemeProvider>
+    </GestureHandlerRootView>
   );
 }
 
@@ -51,6 +54,7 @@ function RootStack() {
       <StatusBar style={resolvedMode === 'dark' ? 'light' : 'dark'} />
       <Stack
         screenOptions={{
+          headerBackTitle: '戻る',
           headerShadowVisible: false,
           headerStyle: { backgroundColor: colors.background },
           headerTintColor: colors.text,

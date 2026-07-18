@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router, useLocalSearchParams, useNavigation } from 'expo-router';
-import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 
 import { BookCover } from '../../src/components/BookCover';
+import { EdgeSwipeBack } from '../../src/components/EdgeSwipeBack';
 import { BookVolumeDetails } from '../../src/lib/bookApis';
 import { getBookVolumeDetails } from '../../src/lib/bookDetailsCache';
 import { useLibrary } from '../../src/store/LibraryContext';
@@ -23,16 +24,34 @@ const statusLabels = {
 } as const;
 
 export default function BookDetailsScreen() {
-  const params = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{ fromSeries?: string; id: string }>();
   const navigation = useNavigation();
   const { books, loading: libraryLoading, updateBook } = useLibrary();
   const { colors } = useAppTheme();
-  const book = books.find((candidate) => candidate.id === params.id);
+  const routeBookId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const activeBookIdRef = useRef(routeBookId);
+  const book = books.find((candidate) => candidate.id === routeBookId);
   const [details, setDetails] = useState<BookVolumeDetails | null>(null);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const goBack = useCallback(() => {
+    const fromSeries = Array.isArray(params.fromSeries) ? params.fromSeries[0] : params.fromSeries;
+    if (fromSeries) {
+      router.replace(`/(tabs)/series/${encodeURIComponent(fromSeries)}`);
+      return;
+    }
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+      return;
+    }
+    if (book?.seriesTitle) {
+      router.replace(`/(tabs)/series/${encodeURIComponent(book.seriesTitle)}`);
+      return;
+    }
+    router.replace('/(tabs)');
+  }, [book?.seriesTitle, navigation, params.fromSeries]);
   useLayoutEffect(() => {
     navigation.setOptions({
       title: book?.volumeNumber ? `${book.volumeNumber}巻` : '巻の情報',
@@ -40,13 +59,7 @@ export default function BookDetailsScreen() {
         <Pressable
           accessibilityLabel="戻る"
           hitSlop={8}
-          onPress={() => {
-            if (navigation.canGoBack()) {
-              navigation.goBack();
-              return;
-            }
-            router.replace('/');
-          }}
+          onPress={goBack}
           style={styles.headerBackButton}
         >
           <Ionicons color={colors.text} name="chevron-back" size={22} />
@@ -54,34 +67,46 @@ export default function BookDetailsScreen() {
         </Pressable>
       ),
     });
-  }, [book?.volumeNumber, colors.text, navigation]);
+  }, [book?.volumeNumber, colors.text, goBack, navigation]);
+
+  useEffect(() => {
+    activeBookIdRef.current = routeBookId;
+    setDetails(null);
+    setError(null);
+    setLoaded(false);
+    setLoading(false);
+  }, [routeBookId]);
 
   const loadDetails = useCallback(
     async (forceRefresh = false) => {
-      if (!book || loading) return;
+      const targetBook = book;
+      const targetBookId = routeBookId;
+      if (!targetBook || loading) return;
       setLoading(true);
       setError(null);
       try {
-        const result = await getBookVolumeDetails(book, { forceRefresh });
+        const result = await getBookVolumeDetails(targetBook, { forceRefresh });
+        if (activeBookIdRef.current !== targetBookId) return;
         setDetails(result);
         if (result) {
           const metadataUpdates = {
-            ...(result.author && result.author !== book.author
+            ...(result.author && result.author !== targetBook.author
               ? { author: result.author }
               : {}),
-            ...(result.publisher && result.publisher !== book.publisher
+            ...(result.publisher && result.publisher !== targetBook.publisher
               ? { publisher: result.publisher }
               : {}),
-            ...(result.thumbnailUrl && result.thumbnailUrl !== book.thumbnailUrl
+            ...(result.thumbnailUrl && result.thumbnailUrl !== targetBook.thumbnailUrl
               ? { thumbnailUrl: result.thumbnailUrl }
               : {}),
           };
           if (Object.keys(metadataUpdates).length > 0) {
-            await updateBook(book.id, metadataUpdates);
+            await updateBook(targetBook.id, metadataUpdates);
           }
         }
         setLoaded(true);
       } catch (loadError) {
+        if (activeBookIdRef.current !== targetBookId) return;
         setError(
           loadError instanceof Error
             ? loadError.message
@@ -89,15 +114,17 @@ export default function BookDetailsScreen() {
         );
         setLoaded(true);
       } finally {
-        setLoading(false);
+        if (activeBookIdRef.current === targetBookId) {
+          setLoading(false);
+        }
       }
     },
-    [book, loading, updateBook],
+    [book, loading, routeBookId, updateBook],
   );
 
   useEffect(() => {
     if (book && !loaded) void loadDetails();
-  }, [book, loadDetails, loaded]);
+  }, [book, loadDetails, loaded, routeBookId]);
 
   if (!book) {
     return (
@@ -124,11 +151,12 @@ export default function BookDetailsScreen() {
   const displayCover = details?.thumbnailUrl ?? book.thumbnailUrl;
 
   return (
-    <ScrollView
-      style={[styles.screen, { backgroundColor: colors.background }]}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-    >
+    <EdgeSwipeBack onBack={goBack} style={{ backgroundColor: colors.background }}>
+      <ScrollView
+        style={styles.screen}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
       <BookCover
         thumbnailUrl={displayCover}
         isbn={book.isbn}
@@ -182,7 +210,8 @@ export default function BookDetailsScreen() {
           情報提供: {details.source}
         </Text>
       )}
-    </ScrollView>
+      </ScrollView>
+    </EdgeSwipeBack>
   );
 }
 
