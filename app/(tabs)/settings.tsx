@@ -623,7 +623,7 @@ export default function SettingsScreen() {
 
       <View style={[styles.section, { borderBottomColor: colors.border }]}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>アプリ情報</Text>
-        <Link href="/(tabs)/privacy" asChild>
+        <Link href="/privacy" asChild>
           <Pressable
             style={[
               styles.accountLink,

@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { useAppTheme } from '../../src/store/ThemeContext';
+import { useAppTheme } from '../src/store/ThemeContext';
 
 const sections = [
   {

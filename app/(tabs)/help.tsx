@@ -1,7 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useState } from 'react';
+import { router, useNavigation } from 'expo-router';
+import { useCallback, useLayoutEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { EdgeSwipeBack } from '../../src/components/EdgeSwipeBack';
+import { HeaderBackButton } from '../../src/components/HeaderBackButton';
 import { useAppTheme } from '../../src/store/ThemeContext';
 
 type HelpCategory = {
@@ -194,15 +197,26 @@ const helpCategories: HelpCategory[] = [
 ];
 
 export default function HelpScreen() {
+  const navigation = useNavigation();
   const { colors } = useAppTheme();
   const [selectedIndex, setSelectedIndex] = useState(0);
   const selectedCategory = helpCategories[selectedIndex];
+  const goBack = useCallback(() => {
+    router.replace('/(tabs)/settings');
+  }, []);
+
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerLeft: () => <HeaderBackButton accessibilityLabel="設定に戻る" onPress={goBack} />,
+    });
+  }, [goBack, navigation]);
 
   return (
-    <ScrollView
-      style={[styles.screen, { backgroundColor: colors.background }]}
-      contentContainerStyle={styles.content}
-    >
+    <EdgeSwipeBack onBack={goBack} style={{ backgroundColor: colors.background }}>
+      <ScrollView
+        style={[styles.screen, { backgroundColor: colors.background }]}
+        contentContainerStyle={styles.content}
+      >
       <View style={styles.header}>
         <Text style={[styles.title, { color: colors.text }]}>BookNestの使い方</Text>
         <Text style={[styles.copy, { color: colors.muted }]}>
@@ -244,7 +258,8 @@ export default function HelpScreen() {
           <Text style={[styles.cardCopy, { color: colors.muted }]}>{section.body}</Text>
         </View>
       ))}
-    </ScrollView>
+      </ScrollView>
+    </EdgeSwipeBack>
   );
 }
 

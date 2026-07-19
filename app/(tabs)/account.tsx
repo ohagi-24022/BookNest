@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Link } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, router, useNavigation } from 'expo-router';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -12,6 +12,8 @@ import {
   View,
 } from 'react-native';
 
+import { EdgeSwipeBack } from '../../src/components/EdgeSwipeBack';
+import { HeaderBackButton } from '../../src/components/HeaderBackButton';
 import { deleteCurrentAccount } from '../../src/lib/account';
 import {
   getNewReleaseNotificationLogs,
@@ -25,6 +27,7 @@ import { useAppTheme } from '../../src/store/ThemeContext';
 const ESTIMATED_BOOK_PRICE = 600;
 
 export default function AccountScreen() {
+  const navigation = useNavigation();
   const { user } = useAuth();
   const { setNewReleaseNotifications } = useAppSettings();
   const { books, seriesGroups } = useLibrary();
@@ -33,6 +36,16 @@ export default function AccountScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [accountDeleting, setAccountDeleting] = useState(false);
+  const goBack = useCallback(() => {
+    router.replace('/(tabs)/settings');
+  }, []);
+
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerLeft: () => <HeaderBackButton accessibilityLabel="設定に戻る" onPress={goBack} />,
+    });
+  }, [goBack, navigation]);
+
   const expenseSummary = useMemo(() => {
     const totalBooks = books.length;
     const estimatedTotal = totalBooks * ESTIMATED_BOOK_PRICE;
@@ -103,27 +116,30 @@ export default function AccountScreen() {
 
   if (!user) {
     return (
-      <View style={[styles.centerScreen, { backgroundColor: colors.background }]}>
-        <Ionicons color={colors.muted} name="person-circle-outline" size={42} />
-        <Text style={[styles.emptyTitle, { color: colors.text }]}>ログインが必要です</Text>
-        <Text style={[styles.emptyCopy, { color: colors.muted }]}>
-          新刊通知の詳細は、ログイン後に確認できます。
-        </Text>
-        <Link href="/(tabs)/settings" asChild>
-          <Pressable style={[styles.button, { borderColor: colors.border }]}>
-            <Text style={[styles.buttonText, { color: colors.text }]}>設定へ移動</Text>
-          </Pressable>
-        </Link>
-      </View>
+      <EdgeSwipeBack onBack={goBack} style={{ backgroundColor: colors.background }}>
+        <View style={[styles.centerScreen, { backgroundColor: colors.background }]}>
+          <Ionicons color={colors.muted} name="person-circle-outline" size={42} />
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>ログインが必要です</Text>
+          <Text style={[styles.emptyCopy, { color: colors.muted }]}>
+            新刊通知の詳細は、ログイン後に確認できます。
+          </Text>
+          <Link href="/(tabs)/settings" asChild>
+            <Pressable style={[styles.button, { borderColor: colors.border }]}>
+              <Text style={[styles.buttonText, { color: colors.text }]}>設定へ移動</Text>
+            </Pressable>
+          </Link>
+        </View>
+      </EdgeSwipeBack>
     );
   }
 
   return (
-    <ScrollView
-      refreshControl={<RefreshControl refreshing={loading} onRefresh={() => void loadLogs()} />}
-      style={[styles.screen, { backgroundColor: colors.background }]}
-      contentContainerStyle={styles.content}
-    >
+    <EdgeSwipeBack onBack={goBack} style={{ backgroundColor: colors.background }}>
+      <ScrollView
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={() => void loadLogs()} />}
+        style={[styles.screen, { backgroundColor: colors.background }]}
+        contentContainerStyle={styles.content}
+      >
       <View style={[styles.section, { borderBottomColor: colors.border }]}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>マイページ</Text>
         <Text style={[styles.email, { color: colors.text }]}>{user.email}</Text>
@@ -220,7 +236,8 @@ export default function AccountScreen() {
           </Text>
         </Pressable>
       </View>
-    </ScrollView>
+      </ScrollView>
+    </EdgeSwipeBack>
   );
 }
 

@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Link } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { Link, router, useNavigation } from 'expo-router';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -11,6 +11,8 @@ import {
   View,
 } from 'react-native';
 
+import { EdgeSwipeBack } from '../../src/components/EdgeSwipeBack';
+import { HeaderBackButton } from '../../src/components/HeaderBackButton';
 import {
   getNewReleaseNotificationLogs,
   NewReleaseNotificationLog,
@@ -19,11 +21,21 @@ import { useAuth } from '../../src/store/AuthContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 
 export default function NotificationsScreen() {
+  const navigation = useNavigation();
   const { user } = useAuth();
   const { colors } = useAppTheme();
   const [logs, setLogs] = useState<NewReleaseNotificationLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const goBack = useCallback(() => {
+    router.replace('/(tabs)/settings');
+  }, []);
+
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerLeft: () => <HeaderBackButton accessibilityLabel="設定に戻る" onPress={goBack} />,
+    });
+  }, [goBack, navigation]);
 
   const loadLogs = useCallback(async () => {
     if (!user) return;
@@ -44,27 +56,30 @@ export default function NotificationsScreen() {
 
   if (!user) {
     return (
-      <View style={[styles.centerScreen, { backgroundColor: colors.background }]}>
-        <Ionicons color={colors.muted} name="notifications-outline" size={42} />
-        <Text style={[styles.emptyTitle, { color: colors.text }]}>ログインが必要です</Text>
-        <Text style={[styles.emptyCopy, { color: colors.muted }]}>
-          新刊通知の詳細はログイン後に確認できます。
-        </Text>
-        <Link href="/(tabs)/settings" asChild>
-          <Pressable style={[styles.button, { borderColor: colors.border }]}>
-            <Text style={[styles.buttonText, { color: colors.text }]}>設定へ移動</Text>
-          </Pressable>
-        </Link>
-      </View>
+      <EdgeSwipeBack onBack={goBack} style={{ backgroundColor: colors.background }}>
+        <View style={[styles.centerScreen, { backgroundColor: colors.background }]}>
+          <Ionicons color={colors.muted} name="notifications-outline" size={42} />
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>ログインが必要です</Text>
+          <Text style={[styles.emptyCopy, { color: colors.muted }]}>
+            新刊通知の詳細はログイン後に確認できます。
+          </Text>
+          <Link href="/(tabs)/settings" asChild>
+            <Pressable style={[styles.button, { borderColor: colors.border }]}>
+              <Text style={[styles.buttonText, { color: colors.text }]}>設定へ移動</Text>
+            </Pressable>
+          </Link>
+        </View>
+      </EdgeSwipeBack>
     );
   }
 
   return (
-    <ScrollView
-      refreshControl={<RefreshControl refreshing={loading} onRefresh={() => void loadLogs()} />}
-      style={[styles.screen, { backgroundColor: colors.background }]}
-      contentContainerStyle={styles.content}
-    >
+    <EdgeSwipeBack onBack={goBack} style={{ backgroundColor: colors.background }}>
+      <ScrollView
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={() => void loadLogs()} />}
+        style={[styles.screen, { backgroundColor: colors.background }]}
+        contentContainerStyle={styles.content}
+      >
       <View style={styles.header}>
         <View style={styles.headerRow}>
           <View style={styles.headerText}>
@@ -117,7 +132,8 @@ export default function NotificationsScreen() {
           ))}
         </View>
       )}
-    </ScrollView>
+      </ScrollView>
+    </EdgeSwipeBack>
   );
 }
 

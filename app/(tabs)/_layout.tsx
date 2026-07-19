@@ -116,7 +116,6 @@ export default function TabLayout() {
       <Tabs.Screen name="account" options={{ href: null, title: 'マイページ' }} />
       <Tabs.Screen name="notifications" options={{ href: null, title: '新刊通知' }} />
       <Tabs.Screen name="ranking/[category]" options={{ href: null, title: 'ランキング' }} />
-      <Tabs.Screen name="privacy" options={{ href: null, title: 'プライバシーポリシー' }} />
     </Tabs>
   );
 }
