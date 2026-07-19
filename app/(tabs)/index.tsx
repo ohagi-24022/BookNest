@@ -172,7 +172,7 @@ export default function HomeScreen() {
   const { favoriteSeriesKeys, hydrated: appSettingsHydrated, newReleaseNotifications, setFavoriteSeries, showPublishedLatestVolume } =
     useAppSettings();
   const { user } = useAuth();
-  const { books, error, loading, repairBookMetadata, requiresAuth, seriesGroups } = useLibrary();
+  const { books, error, loading, refreshLibrary, repairBookMetadata, requiresAuth, seriesGroups } = useLibrary();
   const [filters, setFilters] = useState<HomeFilter[]>(['all']);
   const [viewMode, setViewMode] = useState<'series' | 'books'>('series');
   const [seriesDisplayMode, setSeriesDisplayMode] = useState<SeriesDisplayMode>('detail');
@@ -677,6 +677,7 @@ export default function HomeScreen() {
         onQueryChange={setQuery}
         onSeriesDisplayModeChange={() => setSeriesDisplayMode((current) => getNextSeriesDisplayMode(current))}
         onViewModeChange={selectViewMode}
+        onOpenMyPage={() => router.navigate('/(tabs)/account')}
         onOpenFilter={() => setOpenMenu('filter')}
         onOpenSort={() => setOpenMenu('sort')}
       />
@@ -696,6 +697,8 @@ export default function HomeScreen() {
             { paddingTop: listTopPadding },
           ]}
           showsVerticalScrollIndicator={false}
+          refreshing={loading}
+          onRefresh={refreshLibrary}
           onScroll={handleScroll}
           scrollEventThrottle={16}
           renderItem={({ item }) => {
@@ -800,6 +803,8 @@ export default function HomeScreen() {
           extraData={listVersion}
           keyExtractor={(item) => item.id}
           contentContainerStyle={[styles.bookList, { paddingTop: listTopPadding }]}
+          refreshing={loading}
+          onRefresh={refreshLibrary}
           onScroll={handleScroll}
           scrollEventThrottle={16}
           renderItem={({ item }) => <BookRow book={item} />}

@@ -63,13 +63,6 @@ function RootStack() {
         }}
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="series/[title]" options={{ title: 'シリーズ' }} />
-        <Stack.Screen name="book/[id]" options={{ title: '巻の情報' }} />
-        <Stack.Screen name="help" options={{ title: 'ヘルプ' }} />
-        <Stack.Screen name="account" options={{ title: 'ユーザー' }} />
-        <Stack.Screen name="notifications" options={{ title: '新刊通知' }} />
-        <Stack.Screen name="ranking/[category]" options={{ title: 'ランキング' }} />
-        <Stack.Screen name="privacy" options={{ title: 'プライバシーポリシー' }} />
       </Stack>
     </>
   );

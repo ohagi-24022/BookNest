@@ -21,6 +21,7 @@ type HomeToolbarProps = {
   onQueryChange: (query: string) => void;
   onSeriesDisplayModeChange: () => void;
   onViewModeChange: (mode: 'series' | 'books') => void;
+  onOpenMyPage: () => void;
   onOpenFilter: () => void;
   onOpenSort: () => void;
 };
@@ -41,6 +42,7 @@ export function HomeToolbar({
   onQueryChange,
   onSeriesDisplayModeChange,
   onViewModeChange,
+  onOpenMyPage,
   onOpenFilter,
   onOpenSort,
 }: HomeToolbarProps) {
@@ -69,8 +71,19 @@ export function HomeToolbar({
         },
       ]}
     >
-      <Text style={[styles.title, { color: colors.text }]}>BookNest</Text>
-      <Text style={[styles.subtitle, { color: colors.muted }]}>{countLabel}</Text>
+      <View style={styles.titleRow}>
+        <View style={styles.titleBlock}>
+          <Text style={[styles.title, { color: colors.text }]}>BookNest</Text>
+          <Text style={[styles.subtitle, { color: colors.muted }]}>{countLabel}</Text>
+        </View>
+        <Pressable
+          accessibilityLabel="マイページを開く"
+          onPress={onOpenMyPage}
+          style={[styles.accountButton, { borderColor: colors.border }]}
+        >
+          <Ionicons color={colors.text} name="person-circle-outline" size={24} />
+        </Pressable>
+      </View>
 
       {loading && (
         <View style={[styles.notice, { backgroundColor: colors.elevated }]}>
@@ -92,6 +105,7 @@ export function HomeToolbar({
           placeholderTextColor={colors.muted}
           autoCorrect={false}
           autoCapitalize="none"
+          clearButtonMode="while-editing"
           style={[styles.search, { backgroundColor: colors.input, color: colors.text }]}
         />
         {viewMode === 'series' && (
@@ -157,8 +171,18 @@ const styles = StyleSheet.create({
     top: 0,
     zIndex: 20,
   },
+  titleRow: { alignItems: 'center', flexDirection: 'row', gap: 12, justifyContent: 'space-between' },
+  titleBlock: { flex: 1 },
   title: { fontSize: 24, fontWeight: '800', letterSpacing: 0 },
   subtitle: { fontSize: 12, marginTop: 1 },
+  accountButton: {
+    alignItems: 'center',
+    borderRadius: 999,
+    borderWidth: 1,
+    height: 42,
+    justifyContent: 'center',
+    width: 42,
+  },
   notice: {
     borderRadius: 8,
     justifyContent: 'center',

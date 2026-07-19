@@ -305,7 +305,7 @@ async function deliverDailyNotifications(userLimit: number) {
         const response = await sendExpoPush({
           body: 'BookNestで新刊情報を確認できます。',
           data: {
-            url: '/account',
+            url: '/(tabs)/notifications',
           },
           sound: 'default',
           title: 'BookNest 新刊情報',

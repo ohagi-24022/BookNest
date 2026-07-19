@@ -83,6 +83,7 @@ type LibraryContextValue = {
   requiresAuth: boolean;
   localImportCount: number;
   seriesGroups: SeriesGroup[];
+  refreshLibrary: () => void;
   addBook: (book: BookInput, options?: AddBookOptions) => Promise<Book>;
   addBookByIsbn: (isbn: string) => Promise<Book | null>;
   findDuplicateBook: (book: BookInput) => Book | undefined;
@@ -262,8 +263,12 @@ export function LibraryProvider({ children }: PropsWithChildren) {
   const [pendingLocalBooks, setPendingLocalBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(configured);
   const [error, setError] = useState<string | null>(null);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const enrichedIsbnsRef = useRef(new Set<string>());
   const requiresAuth = false;
+  const refreshLibrary = useCallback(() => {
+    setReloadNonce((current) => current + 1);
+  }, []);
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY)
@@ -372,7 +377,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
     }
 
     loadBooks(client);
-  }, [configured, initializing, pendingLocalBooks, user]);
+  }, [configured, initializing, pendingLocalBooks, reloadNonce, user]);
 
   useEffect(() => {
     if (!configured || !user || !supabase) return;
@@ -746,6 +751,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
       requiresAuth,
       localImportCount: pendingLocalBooks.length,
       seriesGroups,
+      refreshLibrary,
       addBook,
       addBookByIsbn,
       findDuplicateBook,
@@ -769,6 +775,7 @@ export function LibraryProvider({ children }: PropsWithChildren) {
       loading,
       migrateLocalBooks,
       pendingLocalBooks.length,
+      refreshLibrary,
       repairBookMetadata,
       renameSeries,
       requiresAuth,

@@ -313,10 +313,10 @@ export default function SettingsScreen() {
                 <View style={styles.rowText}>
                   <View style={styles.linkTitleRow}>
                     <Ionicons color={colors.muted} name="chevron-forward" size={16} />
-                    <Text style={[styles.rowTitle, { color: colors.text }]}>ユーザーページ</Text>
+                    <Text style={[styles.rowTitle, { color: colors.text }]}>マイページ</Text>
                   </View>
                   <Text style={[styles.rowCopy, { color: colors.muted }]}>
-                    通知履歴、アカウント情報、アカウント削除を確認できます。
+                    通知履歴、支出サマリー、アカウント情報を確認できます。
                   </Text>
                 </View>
               </Pressable>
