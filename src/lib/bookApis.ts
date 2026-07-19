@@ -134,6 +134,16 @@ export type BookVolumeDetails = {
   checkedAt: string;
 };
 
+export type SeriesSearchCandidate = {
+  author?: string;
+  coverUrl?: string;
+  publisher?: string;
+  sampleTitle: string;
+  seriesTitle: string;
+  source: 'Google Books' | 'Rakuten Books';
+  volumeNumber?: number;
+};
+
 function normalizeIsbn(isbn: string) {
   return isbn.replace(/[^0-9X]/gi, '').toUpperCase();
 }
@@ -475,6 +485,109 @@ async function lookupRakutenBooksTotal(keyword: string, expected?: ExpectedBook)
   if (!item?.title) return null;
 
   return rakutenItemToBookInput(item);
+}
+
+async function searchRakutenBookInputs(params: {
+  path: 'BooksBook/Search/20170404' | 'BooksTotal/Search/20170404';
+  queryParamName: 'keyword' | 'title';
+  query: string;
+}) {
+  if (!supabase || !params.query.trim()) return [];
+
+  const searchParams = new URLSearchParams({ [params.queryParamName]: params.query });
+  const response = await fetchRakutenWithTimeout(
+    `https://openapi.rakuten.co.jp/services/api/${params.path}?${searchParams.toString()}`,
+    { path: params.path, params: Object.fromEntries(searchParams.entries()) },
+  );
+  if (!response.ok) return [];
+
+  const payload = (await response.json()) as RakutenBooksResponse;
+  return (
+    payload.Items?.map((entry) => entry.Item)
+      .filter((item): item is RakutenItem => !!item?.title && !isNonBookRakutenItem(item))
+      .map((item) => rakutenItemToBookInput(item)) ?? []
+  );
+}
+
+function toSeriesSearchCandidate(book: BookInput, source: SeriesSearchCandidate['source']): SeriesSearchCandidate | null {
+  const parsed = parseSeriesTitle(book.seriesTitle || book.title);
+  const seriesTitle = parsed.seriesTitle.trim();
+  if (!seriesTitle) return null;
+
+  return {
+    author: book.author,
+    coverUrl: book.thumbnailUrl,
+    publisher: book.publisher,
+    sampleTitle: book.title,
+    seriesTitle,
+    source,
+    volumeNumber: book.volumeNumber ?? parsed.volumeNumber,
+  };
+}
+
+function mergeSeriesCandidates(candidates: SeriesSearchCandidate[]) {
+  const bySeries = new Map<string, SeriesSearchCandidate>();
+
+  for (const candidate of candidates) {
+    const key = normalizeSeriesKey(candidate.seriesTitle);
+    if (!key) continue;
+    const current = bySeries.get(key);
+    const currentRank = current?.volumeNumber === 1 ? 0 : current?.volumeNumber ?? Number.MAX_SAFE_INTEGER;
+    const candidateRank = candidate.volumeNumber === 1 ? 0 : candidate.volumeNumber ?? Number.MAX_SAFE_INTEGER;
+    const shouldReplace =
+      !current ||
+      (!current.coverUrl && !!candidate.coverUrl) ||
+      (!!current.coverUrl === !!candidate.coverUrl && candidateRank < currentRank);
+
+    if (shouldReplace) bySeries.set(key, candidate);
+  }
+
+  return [...bySeries.values()].sort(
+    (left, right) =>
+      Number(!left.coverUrl) - Number(!right.coverUrl) ||
+      (left.volumeNumber ?? Number.MAX_SAFE_INTEGER) - (right.volumeNumber ?? Number.MAX_SAFE_INTEGER) ||
+      left.seriesTitle.localeCompare(right.seriesTitle),
+  );
+}
+
+export async function searchSeriesCandidates(query: string): Promise<SeriesSearchCandidate[]> {
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery) return [];
+
+  const titleQueries = buildTitleQueries(trimmedQuery).slice(0, 2);
+  const rakutenBooks = (
+    await Promise.all(
+      titleQueries.flatMap((titleQuery) => [
+        searchRakutenBookInputs({
+          path: 'BooksBook/Search/20170404',
+          queryParamName: 'title',
+          query: titleQuery,
+        }),
+        searchRakutenBookInputs({
+          path: 'BooksTotal/Search/20170404',
+          queryParamName: 'keyword',
+          query: titleQuery,
+        }),
+      ]),
+    )
+  ).flat();
+
+  const googleBooks = (
+    await Promise.all(
+      titleQueries.map((titleQuery) =>
+        tryLookup('Google Books', () => lookupGoogleBooksByQuery(`intitle:${titleQuery}`, ''), { silent: true }),
+      ),
+    )
+  ).filter((book): book is BookInput => !!book);
+
+  return mergeSeriesCandidates([
+    ...rakutenBooks
+      .map((book) => toSeriesSearchCandidate(book, 'Rakuten Books'))
+      .filter((candidate): candidate is SeriesSearchCandidate => !!candidate),
+    ...googleBooks
+      .map((book) => toSeriesSearchCandidate(book, 'Google Books'))
+      .filter((candidate): candidate is SeriesSearchCandidate => !!candidate),
+  ]).slice(0, 8);
 }
 
 function findLatestVolumeFromTitles(titles: Array<string | undefined>, seriesTitle: string) {

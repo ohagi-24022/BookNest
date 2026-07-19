@@ -10,6 +10,7 @@ import {
   useState,
 } from 'react';
 
+import { parseSeriesTitle } from '../lib/series';
 import { supabase } from '../lib/supabase';
 import { useAuth } from './AuthContext';
 
@@ -20,6 +21,7 @@ export type WishlistItem = {
   title: string;
   score: number;
   coverUrl?: string;
+  cloudNormalizedTitle?: string;
   note?: string;
   purchaseUrl?: string;
   createdAt: string;
@@ -65,7 +67,7 @@ function clampScore(score: number) {
 }
 
 function normalizeWantedTitle(title: string) {
-  return title
+  return parseSeriesTitle(title).seriesTitle
     .normalize('NFKC')
     .toLowerCase()
     .replace(/[\u300c\u300d\u300e\u300f\u3010\u3011\uff3b\uff3d[\]\uff08\uff09()]/g, ' ')
@@ -84,6 +86,7 @@ function toWishlistItem(row: WantedMangaRow): WishlistItem {
     title: row.title,
     score: clampScore(row.score),
     coverUrl: row.cover_url ?? undefined,
+    cloudNormalizedTitle: row.normalized_title,
     note: row.note ?? undefined,
     purchaseUrl: row.purchase_url ?? undefined,
     createdAt: row.created_at ?? row.updated_at ?? now,
@@ -98,7 +101,9 @@ function mergeItems(localItems: WishlistItem[], cloudItems: WishlistItem[]) {
     if (!key) continue;
     const current = byTitle.get(key);
     if (!current || item.updatedAt.localeCompare(current.updatedAt) >= 0) {
-      byTitle.set(key, item);
+      byTitle.set(key, { ...item, cloudNormalizedTitle: item.cloudNormalizedTitle ?? current?.cloudNormalizedTitle });
+    } else if (item.cloudNormalizedTitle && !current.cloudNormalizedTitle) {
+      byTitle.set(key, { ...current, cloudNormalizedTitle: item.cloudNormalizedTitle });
     }
   }
   return [...byTitle.values()];
@@ -126,6 +131,13 @@ export function WishlistProvider({ children }: PropsWithChildren) {
       if (!supabase || !user) return;
       const normalizedTitle = normalizeWantedTitle(item.title);
       if (!normalizedTitle) return;
+      if (item.cloudNormalizedTitle && item.cloudNormalizedTitle !== normalizedTitle) {
+        await supabase
+          .from('wanted_manga')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('normalized_title', item.cloudNormalizedTitle);
+      }
       const { error } = await supabase.from('wanted_manga').upsert(
         {
           note: item.note ?? null,
@@ -151,11 +163,8 @@ export function WishlistProvider({ children }: PropsWithChildren) {
       if (!supabase || !user) return;
       const normalizedTitle = normalizeWantedTitle(item.title);
       if (!normalizedTitle) return;
-      const { error } = await supabase
-        .from('wanted_manga')
-        .delete()
-        .eq('user_id', user.id)
-        .eq('normalized_title', normalizedTitle);
+      const keys = [...new Set([normalizedTitle, item.cloudNormalizedTitle].filter(Boolean))];
+      const { error } = await supabase.from('wanted_manga').delete().eq('user_id', user.id).in('normalized_title', keys);
       if (error) {
         console.warn('Failed to delete wanted manga item.', error.message);
       }

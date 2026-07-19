@@ -4,6 +4,8 @@ import * as WebBrowser from 'expo-web-browser';
 import { useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,7 +15,8 @@ import {
 } from 'react-native';
 
 import { BookCover } from '../../src/components/BookCover';
-import { buildPurchaseUrl } from '../../src/lib/bookApis';
+import { buildPurchaseUrl, searchSeriesCandidates, SeriesSearchCandidate } from '../../src/lib/bookApis';
+import { normalizeSeriesKey } from '../../src/lib/series';
 import { useLibrary } from '../../src/store/LibraryContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 import { useWishlist, WishlistItem } from '../../src/store/WishlistContext';
@@ -45,6 +48,9 @@ export default function WishlistScreen() {
   const { addItem, deleteItem, items, updateItem } = useWishlist();
   const [title, setTitle] = useState('');
   const [note, setNote] = useState('');
+  const [candidates, setCandidates] = useState<SeriesSearchCandidate[]>([]);
+  const [candidateLoading, setCandidateLoading] = useState(false);
+  const [selectedCandidate, setSelectedCandidate] = useState<SeriesSearchCandidate | null>(null);
   const [selectedPriority, setSelectedPriority] = useState(priorityOptions[1]);
   const [memoOpen, setMemoOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -52,19 +58,45 @@ export default function WishlistScreen() {
   const [editingNote, setEditingNote] = useState('');
   const [lastDeleted, setLastDeleted] = useState<WishlistItem | null>(null);
   const [editMode, setEditMode] = useState(false);
+  const [editOrderIds, setEditOrderIds] = useState<string[]>([]);
+  const [overviewHeight, setOverviewHeight] = useState(0);
+  const [topSectionHeight, setTopSectionHeight] = useState(0);
   const scrollRef = useRef<ScrollView>(null);
+  const scrollYRef = useRef(0);
   const tabScrollToTopRef = useRef({
     scrollToTop: () => scrollRef.current?.scrollTo({ y: 0, animated: true }),
   });
 
   const trimmedTitle = title.trim();
   const topItems = useMemo(() => items.slice(0, 5), [items]);
+  const displayItems = useMemo(() => {
+    if (!editMode) return items;
+    const itemById = new Map(items.map((item) => [item.id, item]));
+    const orderedItems = editOrderIds
+      .map((id) => itemById.get(id))
+      .filter((item): item is WishlistItem => !!item);
+    const pinnedIds = new Set(editOrderIds);
+    const newItems = items.filter((item) => !pinnedIds.has(item.id));
+    return [...orderedItems, ...newItems];
+  }, [editMode, editOrderIds, items]);
   const highPriorityCount = useMemo(() => items.filter((item) => item.score >= 90).length, [items]);
   const averageScore = useMemo(() => {
     if (items.length === 0) return 0;
     return Math.round(items.reduce((sum, item) => sum + item.score, 0) / items.length);
   }, [items]);
   useScrollToTop(tabScrollToTopRef);
+  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    scrollYRef.current = event.nativeEvent.contentOffset.y;
+  };
+  const hiddenSummaryHeight = () => overviewHeight + (topItems.length > 0 ? topSectionHeight : 0) + 32;
+  const adjustScrollAfterLayoutChange = (delta: number) => {
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({
+        y: Math.max(0, scrollYRef.current + delta),
+        animated: false,
+      });
+    });
+  };
   const coverByTitle = useMemo(() => {
     const map = new Map<string, { coverUrl: string; rank: number }>();
     const sortedBooks = [...books].sort((left, right) => {
@@ -102,25 +134,72 @@ export default function WishlistScreen() {
       .sort((left, right) => left[1].rank - right[1].rank)?.[0]?.[1].coverUrl;
   };
 
+  const refineCandidates = (results: SeriesSearchCandidate[]) => {
+    const queryKey = normalizeSeriesKey(trimmedTitle);
+    const exactMatches = results.filter((candidate) => normalizeSeriesKey(candidate.seriesTitle) === queryKey);
+    if (exactMatches.length > 0) return [exactMatches[0]];
+
+    const containedMatches = results.filter((candidate) => {
+      const candidateKey = normalizeSeriesKey(candidate.seriesTitle);
+      return candidateKey.includes(queryKey) || queryKey.includes(candidateKey);
+    });
+    if (containedMatches.length === 1) return containedMatches;
+
+    return results.slice(0, 5);
+  };
+
+  const searchCandidates = async () => {
+    if (!trimmedTitle) {
+      Alert.alert('BookNest', 'タイトルまたはシリーズ名を入力してください。');
+      return;
+    }
+    setCandidateLoading(true);
+    setSelectedCandidate(null);
+    try {
+      const results = refineCandidates(await searchSeriesCandidates(trimmedTitle));
+      setCandidates(results);
+      setSelectedCandidate(results.length === 1 ? results[0] : null);
+      if (results.length === 0) {
+        Alert.alert('候補が見つかりませんでした', '入力したシリーズ名のまま追加できます。');
+      }
+    } catch (error) {
+      Alert.alert('検索に失敗しました', error instanceof Error ? error.message : '通信状態を確認してもう一度お試しください。');
+    } finally {
+      setCandidateLoading(false);
+    }
+  };
+
   const submit = () => {
     if (!trimmedTitle) {
       Alert.alert('BookNest', '欲しい漫画のタイトルを入力してください。');
       return;
     }
+    if (candidates.length > 1 && !selectedCandidate) {
+      Alert.alert('候補を選択してください', '複数のシリーズ候補から追加するものを選んでください。');
+      return;
+    }
+    const addTitle = selectedCandidate?.seriesTitle ?? trimmedTitle;
+    const addCoverUrl = selectedCandidate?.coverUrl ?? findCoverUrl(addTitle);
     addItem({
-      title: trimmedTitle,
+      title: addTitle,
       score: selectedPriority.score,
-      coverUrl: findCoverUrl(trimmedTitle),
+      coverUrl: addCoverUrl,
       note,
-      purchaseUrl: buildPurchaseUrl(trimmedTitle),
+      purchaseUrl: buildPurchaseUrl(addTitle),
     });
     setTitle('');
     setNote('');
+    setCandidates([]);
+    setSelectedCandidate(null);
     setMemoOpen(false);
     setSelectedPriority(priorityOptions[1]);
   };
 
   const startEditing = (item: WishlistItem) => {
+    if (!editMode) {
+      setEditOrderIds(items.map((currentItem) => currentItem.id));
+      adjustScrollAfterLayoutChange(-hiddenSummaryHeight());
+    }
     setEditMode(true);
     setEditingId(item.id);
     setEditingTitle(item.title);
@@ -155,16 +234,20 @@ export default function WishlistScreen() {
   };
 
   const toggleEditMode = () => {
-    setEditMode((current) => {
-      const next = !current;
-      if (!next) {
-        setEditingId(null);
-        setEditingTitle('');
-        setEditingNote('');
-        setMemoOpen(false);
-      }
-      return next;
-    });
+    if (editMode) {
+      const restoreHeight = hiddenSummaryHeight();
+      setEditOrderIds([]);
+      setEditingId(null);
+      setEditingTitle('');
+      setEditingNote('');
+      setMemoOpen(false);
+      setEditMode(false);
+      adjustScrollAfterLayoutChange(restoreHeight);
+      return;
+    }
+
+    setEditOrderIds(items.map((item) => item.id));
+    setEditMode(true);
   };
 
   return (
@@ -173,6 +256,8 @@ export default function WishlistScreen() {
         ref={scrollRef}
         style={styles.screen}
         contentContainerStyle={styles.content}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
         stickyHeaderIndices={[0]}
       >
         <View style={[styles.headerShell, { backgroundColor: colors.background }]}>
@@ -211,22 +296,83 @@ export default function WishlistScreen() {
       <View style={[styles.quickAdd, { backgroundColor: colors.elevated }]}>
         <View style={styles.inputRow}>
           <TextInput
-            onChangeText={setTitle}
+            onChangeText={(value) => {
+              setTitle(value);
+              setCandidates([]);
+              setSelectedCandidate(null);
+            }}
             placeholder="作品名、シリーズ名"
             placeholderTextColor={colors.muted}
-            returnKeyType="done"
+            returnKeyType="search"
             style={[styles.titleInput, { backgroundColor: colors.input, color: colors.text }]}
             value={title}
-            onSubmitEditing={submit}
+            onSubmitEditing={() => void searchCandidates()}
           />
           <Pressable
-            accessibilityLabel="欲しい漫画に追加"
-            onPress={submit}
-            style={[styles.addButton, { backgroundColor: colors.text }, !trimmedTitle && styles.disabledButton]}
+            accessibilityLabel="シリーズ候補を検索"
+            disabled={!trimmedTitle || candidateLoading}
+            onPress={() => void searchCandidates()}
+            style={[
+              styles.addButton,
+              { backgroundColor: colors.text },
+              (!trimmedTitle || candidateLoading) && styles.disabledButton,
+            ]}
           >
-            <Ionicons color={colors.background} name="add" size={22} />
+            <Ionicons color={colors.background} name={candidateLoading ? 'hourglass-outline' : 'search'} size={21} />
           </Pressable>
         </View>
+
+        {candidateLoading ? (
+          <View style={styles.searchStatus}>
+            <Ionicons color={colors.muted} name="sync-outline" size={16} />
+            <Text style={[styles.copyStrong, { color: colors.muted }]}>候補を検索中...</Text>
+          </View>
+        ) : null}
+
+        {candidates.length > 0 ? (
+          <View style={styles.candidateList}>
+            {candidates.map((candidate) => {
+              const selected =
+                selectedCandidate &&
+                normalizeSeriesKey(selectedCandidate.seriesTitle) === normalizeSeriesKey(candidate.seriesTitle);
+              return (
+                <Pressable
+                  key={`${candidate.source}-${candidate.seriesTitle}`}
+                  onPress={() => setSelectedCandidate(candidate)}
+                  style={[
+                    styles.candidateCard,
+                    {
+                      backgroundColor: selected ? colors.surface : colors.input,
+                      borderColor: selected ? colors.text : colors.border,
+                    },
+                  ]}
+                >
+                  <BookCover
+                    placeholderText="No Cover"
+                    style={styles.candidateCover}
+                    thumbnailUrl={candidate.coverUrl}
+                  />
+                  <View style={styles.candidateBody}>
+                    <Text numberOfLines={1} style={[styles.candidateTitle, { color: colors.text }]}>
+                      {candidate.seriesTitle}
+                    </Text>
+                    <Text numberOfLines={1} style={[styles.candidateMeta, { color: colors.muted }]}>
+                      {[candidate.author, candidate.publisher, candidate.source].filter(Boolean).join(' / ')}
+                    </Text>
+                    <Text numberOfLines={1} style={[styles.candidateSample, { color: colors.muted }]}>
+                      {candidate.sampleTitle}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    color={selected ? colors.text : colors.muted}
+                    name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                    size={22}
+                  />
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
 
         <View style={styles.priorityRow}>
           {priorityOptions.map((option) => {
@@ -267,10 +413,29 @@ export default function WishlistScreen() {
             value={note}
           />
         ) : null}
+
+        <Pressable
+          accessibilityLabel="欲しい漫画に追加"
+          disabled={!trimmedTitle || (candidates.length > 1 && !selectedCandidate)}
+          onPress={submit}
+          style={[
+            styles.primaryAddButton,
+            { backgroundColor: colors.text },
+            (!trimmedTitle || (candidates.length > 1 && !selectedCandidate)) && styles.disabledButton,
+          ]}
+        >
+          <Ionicons color={colors.background} name="add-circle-outline" size={18} />
+          <Text style={[styles.primaryAddText, { color: colors.background }]}>
+            {selectedCandidate ? '選択したシリーズを追加' : '入力したシリーズを追加'}
+          </Text>
+        </Pressable>
       </View>
 
       {!editMode ? (
-        <View style={[styles.overview, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <View
+          onLayout={(event) => setOverviewHeight(event.nativeEvent.layout.height)}
+          style={[styles.overview, { backgroundColor: colors.surface, borderColor: colors.border }]}
+        >
           <View style={styles.overviewMain}>
             <View style={[styles.overviewIcon, { backgroundColor: colors.text }]}>
               <Ionicons color={colors.background} name="cart-outline" size={22} />
@@ -302,7 +467,7 @@ export default function WishlistScreen() {
       ) : null}
 
       {!editMode && topItems.length > 0 ? (
-        <View style={styles.topSection}>
+        <View onLayout={(event) => setTopSectionHeight(event.nativeEvent.layout.height)} style={styles.topSection}>
           <View style={styles.sectionTitleRow}>
             <Text style={[styles.summaryTitle, { color: colors.text }]}>今の上位候補</Text>
             <Text style={[styles.copyStrong, { color: colors.muted }]}>上位{topItems.length}件</Text>
@@ -358,7 +523,7 @@ export default function WishlistScreen() {
         </View>
       ) : (
         <View style={styles.list}>
-          {items.map((item, index) => (
+          {displayItems.map((item, index) => (
             <Pressable
               accessibilityLabel={`${item.title}を長押しして編集`}
               key={item.id}
@@ -528,6 +693,31 @@ const styles = StyleSheet.create({
     width: 48,
   },
   disabledButton: { opacity: 0.45 },
+  searchStatus: { alignItems: 'center', flexDirection: 'row', gap: 6 },
+  candidateList: { gap: 8 },
+  candidateCard: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 76,
+    padding: 8,
+  },
+  candidateCover: { borderRadius: 5, height: 58, width: 40 },
+  candidateBody: { flex: 1, gap: 3 },
+  candidateTitle: { fontSize: 14, fontWeight: '900' },
+  candidateMeta: { fontSize: 12, fontWeight: '700' },
+  candidateSample: { fontSize: 12, lineHeight: 16 },
+  primaryAddButton: {
+    alignItems: 'center',
+    borderRadius: 8,
+    flexDirection: 'row',
+    gap: 6,
+    height: 42,
+    justifyContent: 'center',
+  },
+  primaryAddText: { fontSize: 14, fontWeight: '900' },
   priorityRow: { flexDirection: 'row', gap: 8 },
   priorityChip: {
     alignItems: 'center',

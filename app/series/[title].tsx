@@ -1,13 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useFocusEffect } from '@react-navigation/native';
 import * as WebBrowser from 'expo-web-browser';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
-  InteractionManager,
   Linking,
   Pressable,
   StyleSheet,
@@ -166,24 +164,6 @@ export default function SeriesScreen() {
   useEffect(() => {
     resetSeriesView(false);
   }, [resetSeriesView, seriesTitle]);
-
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
-      const task = InteractionManager.runAfterInteractions(() => {
-        if (cancelled) return;
-        resetSeriesView(false);
-        requestAnimationFrame(() => {
-          if (!cancelled) listRef.current?.scrollToOffset({ offset: 0, animated: false });
-        });
-      });
-
-      return () => {
-        cancelled = true;
-        task.cancel();
-      };
-    }, [resetSeriesView, seriesTitle]),
-  );
 
   useEffect(() => {
     let cancelled = false;
