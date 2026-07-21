@@ -62,7 +62,7 @@ export default function SettingsScreen() {
 
   const submitAuth = async (authMode: 'signIn' | 'signUp') => {
     if (!email.trim() || !password) {
-      Alert.alert('BookNest', 'メールアドレスとパスワードを入力してください。');
+      Alert.alert('蒐集架', 'メールアドレスとパスワードを入力してください。');
       return;
     }
 
@@ -72,11 +72,11 @@ export default function SettingsScreen() {
         await signIn(email.trim(), password);
       } else {
         await signUp(email.trim(), password);
-        Alert.alert('BookNest', '確認メールが有効な場合は、メールを確認してください。');
+        Alert.alert('蒐集架', '確認メールが有効な場合は、メールを確認してください。');
       }
       setPassword('');
     } catch (error) {
-      Alert.alert('BookNest', error instanceof Error ? error.message : '認証に失敗しました。');
+      Alert.alert('蒐集架', error instanceof Error ? error.message : '認証に失敗しました。');
     } finally {
       setAuthSubmitting(false);
     }
@@ -87,7 +87,7 @@ export default function SettingsScreen() {
     try {
       await signOut();
     } catch (error) {
-      Alert.alert('BookNest', error instanceof Error ? error.message : 'ログアウトに失敗しました。');
+      Alert.alert('蒐集架', error instanceof Error ? error.message : 'ログアウトに失敗しました。');
     } finally {
       setAuthSubmitting(false);
     }
@@ -137,14 +137,14 @@ export default function SettingsScreen() {
     );
 
     await Share.share({
-      title: 'BookNest CSV Export',
+      title: '蒐集架 CSV Export',
       message: [header.join(','), ...rows].join('\n'),
     });
   };
 
   const exportJson = async () => {
     await Share.share({
-      title: 'BookNest JSON Backup',
+      title: '蒐集架 JSON Backup',
       message: JSON.stringify({ exportedAt: new Date().toISOString(), books }, null, 2),
     });
   };
@@ -197,7 +197,7 @@ export default function SettingsScreen() {
       await sendNewReleaseDebugNotification();
       Alert.alert(
         '通知テストを送信しました',
-        '端末に「BookNest 通知テスト」が表示されれば、端末側の通知表示は動作しています。',
+        '端末に「蒐集架 通知テスト」が表示されれば、端末側の通知表示は動作しています。',
       );
     } catch (error) {
       Alert.alert(
@@ -300,7 +300,7 @@ export default function SettingsScreen() {
                 <Text style={[styles.rowCopy, { color: colors.muted }]}>{user.email}</Text>
               </View>
             </View>
-            <Link href="/(tabs)/account" asChild>
+            <Link href={{ pathname: '/(tabs)/account', params: { from: 'settings' } }} asChild>
               <Pressable
                 style={[
                   styles.accountLink,
@@ -487,7 +487,7 @@ export default function SettingsScreen() {
             <View style={styles.rowText}>
               <View style={styles.helpTitleRow}>
                 <Ionicons color={colors.muted} name="chevron-forward" size={16} />
-                <Text style={[styles.rowTitle, { color: colors.text }]}>BookNestの使い方</Text>
+                <Text style={[styles.rowTitle, { color: colors.text }]}>蒐集架の使い方</Text>
                 <Ionicons color={colors.muted} name="help-circle-outline" size={17} />
               </View>
               <Text style={[styles.helpCopy, { color: colors.muted }]} numberOfLines={2}>
@@ -504,7 +504,7 @@ export default function SettingsScreen() {
           <View style={styles.rowText}>
             <Text style={[styles.rowTitle, { color: colors.text }]}>外部アプリで直接開く</Text>
             <Text style={[styles.rowCopy, { color: colors.muted }]}>
-              ONは購入アプリへ直接遷移、OFFはBookNest内ブラウザで開きます。
+              ONは購入アプリへ直接遷移、OFFは蒐集架内ブラウザで開きます。
             </Text>
           </View>
           <Switch

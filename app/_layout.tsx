@@ -1,7 +1,8 @@
-import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import { router, Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import { Platform } from 'react-native';
 import 'react-native-gesture-handler';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
@@ -33,20 +34,31 @@ function RootStack() {
   const { colors, resolvedMode } = useAppTheme();
 
   useEffect(() => {
-    const lastResponse = Notifications.getLastNotificationResponse();
-    const initialUrl = lastResponse?.notification.request.content.data?.url;
-    if (typeof initialUrl === 'string') {
-      router.push(initialUrl);
-    }
+    if (Platform.OS === 'android' && Constants.appOwnership === 'expo') return;
 
-    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-      const url = response.notification.request.content.data?.url;
-      if (typeof url === 'string') {
-        router.push(url);
+    let subscription: { remove: () => void } | undefined;
+    let mounted = true;
+
+    void import('expo-notifications').then((Notifications) => {
+      if (!mounted) return;
+      const lastResponse = Notifications.getLastNotificationResponse();
+      const initialUrl = lastResponse?.notification.request.content.data?.url;
+      if (typeof initialUrl === 'string') {
+        router.push(initialUrl);
       }
+
+      subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+        const url = response.notification.request.content.data?.url;
+        if (typeof url === 'string') {
+          router.push(url);
+        }
+      });
     });
 
-    return () => subscription.remove();
+    return () => {
+      mounted = false;
+      subscription?.remove();
+    };
   }, []);
 
   return (

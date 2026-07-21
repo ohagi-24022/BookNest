@@ -218,7 +218,7 @@ export default function HelpScreen() {
         contentContainerStyle={styles.content}
       >
       <View style={styles.header}>
-        <Text style={[styles.title, { color: colors.text }]}>BookNestの使い方</Text>
+        <Text style={[styles.title, { color: colors.text }]}>蒐集架の使い方</Text>
         <Text style={[styles.copy, { color: colors.muted }]}>
           知りたい項目を選ぶと、その機能の使い方を確認できます。
         </Text>

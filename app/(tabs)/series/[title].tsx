@@ -280,7 +280,7 @@ export default function SeriesScreen() {
       await bulkUpdateStatus(selectedIds, status);
       setSelectedIds([]);
     } catch (error) {
-      Alert.alert('BookNest', error instanceof Error ? error.message : '更新に失敗しました。');
+      Alert.alert('蒐集架', error instanceof Error ? error.message : '更新に失敗しました。');
     }
   };
 
@@ -302,7 +302,7 @@ export default function SeriesScreen() {
       });
       setEditingId(null);
     } catch (error) {
-      Alert.alert('BookNest', error instanceof Error ? error.message : '保存に失敗しました。');
+      Alert.alert('蒐集架', error instanceof Error ? error.message : '保存に失敗しました。');
     }
   };
 
@@ -329,12 +329,12 @@ export default function SeriesScreen() {
       Alert.alert('シリーズ名を更新しました', `${updatedCount}冊を「${nextTitle}」へ移しました。`);
       router.replace(`/(tabs)/series/${encodeURIComponent(nextTitle)}`);
     } catch (error) {
-      Alert.alert('BookNest', error instanceof Error ? error.message : 'シリーズ名の更新に失敗しました。');
+      Alert.alert('蒐集架', error instanceof Error ? error.message : 'シリーズ名の更新に失敗しました。');
     }
   };
 
   const confirmDelete = (book: Book) => {
-    Alert.alert('BookNest', `${book.title} を削除しますか？`, [
+    Alert.alert('蒐集架', `${book.title} を削除しますか？`, [
       { text: 'キャンセル', style: 'cancel' },
       {
         text: '削除',
@@ -344,7 +344,7 @@ export default function SeriesScreen() {
             await deleteBook(book.id);
             setSelectedIds((current) => current.filter((id) => id !== book.id));
           } catch (error) {
-            Alert.alert('BookNest', error instanceof Error ? error.message : '削除に失敗しました。');
+            Alert.alert('蒐集架', error instanceof Error ? error.message : '削除に失敗しました。');
           }
         },
       },
@@ -397,7 +397,7 @@ export default function SeriesScreen() {
         ].join('\n'),
       );
     } catch (error) {
-      Alert.alert('BookNest', error instanceof Error ? error.message : '再取得に失敗しました。');
+      Alert.alert('蒐集架', error instanceof Error ? error.message : '再取得に失敗しました。');
     } finally {
       setRefreshingId(null);
     }

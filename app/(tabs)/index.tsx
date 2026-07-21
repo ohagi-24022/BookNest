@@ -677,7 +677,7 @@ export default function HomeScreen() {
         onQueryChange={setQuery}
         onSeriesDisplayModeChange={() => setSeriesDisplayMode((current) => getNextSeriesDisplayMode(current))}
         onViewModeChange={selectViewMode}
-        onOpenMyPage={() => router.navigate('/(tabs)/account')}
+        onOpenMyPage={() => router.navigate({ pathname: '/(tabs)/account', params: { from: 'home' } })}
         onOpenFilter={() => setOpenMenu('filter')}
         onOpenSort={() => setOpenMenu('sort')}
       />

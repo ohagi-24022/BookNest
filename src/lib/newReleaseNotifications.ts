@@ -1,19 +1,9 @@
-import Constants from 'expo-constants';
-import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import Constants from 'expo-constants';import { Platform } from 'react-native';
 
 import { SeriesGroup } from './seriesSelectors';
 import { normalizeSeriesKey } from './series';
 import { supabase } from './supabase';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldPlaySound: false,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
 
 export type NewReleaseSubscriptionInput = {
   latestVolume?: number;
@@ -68,6 +58,38 @@ function getProjectId() {
   return Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
 }
 
+
+type NotificationsModule = typeof import('expo-notifications');
+
+let notificationHandlerReady = false;
+
+function isAndroidExpoGo() {
+  return Platform.OS === 'android' && Constants.appOwnership === 'expo';
+}
+
+async function getNotifications(requireRemotePush = false): Promise<NotificationsModule> {
+  if (isAndroidExpoGo()) {
+    throw new Error(
+      requireRemotePush
+        ? 'Android版のExpo Goではプッシュ通知トークンを取得できません。通知機能はdevelopment buildで確認してください。'
+        : 'Android版のExpo Goでは通知機能の確認に制限があります。development buildで確認してください。',
+    );
+  }
+
+  const Notifications = await import('expo-notifications');
+  if (!notificationHandlerReady) {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+        shouldShowBanner: true,
+        shouldShowList: true,
+      }),
+    });
+    notificationHandlerReady = true;
+  }
+  return Notifications;
+}
 function describeFunctionError(error: unknown) {
   if (error instanceof Error) {
     const context = 'context' in error ? (error as { context?: unknown }).context : undefined;
@@ -89,6 +111,8 @@ function describeFunctionError(error: unknown) {
 }
 
 export async function registerForNewReleasePushToken() {
+  const Notifications = await getNotifications(true);
+
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('new-releases', {
       name: '新刊通知',
@@ -117,6 +141,8 @@ export async function registerForNewReleasePushToken() {
 }
 
 export async function sendNewReleaseDebugNotification() {
+  const Notifications = await getNotifications(false);
+
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('new-releases', {
       name: '新刊通知',
@@ -139,12 +165,11 @@ export async function sendNewReleaseDebugNotification() {
     content: {
       body: 'この通知が表示されれば、端末側の通知表示は動作しています。',
       data: { url: '/(tabs)' },
-      title: 'BookNest 通知テスト',
+      title: '蒐集架 通知テスト',
     },
     trigger: null,
   });
 }
-
 export function buildSeriesSubscriptions(seriesGroups: SeriesGroup[]): NewReleaseSubscriptionInput[] {
   return seriesGroups.map((group) => ({
     latestVolume: group.latestVolume,

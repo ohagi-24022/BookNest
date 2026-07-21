@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Link, router, useNavigation } from 'expo-router';
+import { Link, router, useLocalSearchParams, useNavigation } from 'expo-router';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -27,6 +27,7 @@ import { useAppTheme } from '../../src/store/ThemeContext';
 const ESTIMATED_BOOK_PRICE = 600;
 
 export default function AccountScreen() {
+  const params = useLocalSearchParams<{ from?: string }>();
   const navigation = useNavigation();
   const { user } = useAuth();
   const { setNewReleaseNotifications } = useAppSettings();
@@ -37,14 +38,19 @@ export default function AccountScreen() {
   const [error, setError] = useState<string | null>(null);
   const [accountDeleting, setAccountDeleting] = useState(false);
   const goBack = useCallback(() => {
-    router.replace('/(tabs)/settings');
-  }, []);
+    router.replace(params.from === 'home' ? '/(tabs)' : '/(tabs)/settings');
+  }, [params.from]);
 
   useLayoutEffect(() => {
     navigation.setOptions({
-      headerLeft: () => <HeaderBackButton accessibilityLabel="設定に戻る" onPress={goBack} />,
+      headerLeft: () => (
+        <HeaderBackButton
+          accessibilityLabel={params.from === 'home' ? '本棚に戻る' : '設定に戻る'}
+          onPress={goBack}
+        />
+      ),
     });
-  }, [goBack, navigation]);
+  }, [goBack, navigation, params.from]);
 
   const expenseSummary = useMemo(() => {
     const totalBooks = books.length;

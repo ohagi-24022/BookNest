@@ -84,7 +84,6 @@ export function buildRankingRows(
           Number(right.favoriteCount ?? 0) - Number(left.favoriteCount ?? 0) ||
           Number(right.ownerCount ?? 0) - Number(left.ownerCount ?? 0) ||
           Number(right.wantCount ?? 0) - Number(left.wantCount ?? 0) ||
-          Number(right.ownedVolumeCount ?? 0) - Number(left.ownedVolumeCount ?? 0) ||
           Number(right.popularityScore ?? 0) - Number(left.popularityScore ?? 0) ||
           left.title.localeCompare(right.title),
       );
@@ -119,7 +118,8 @@ export function buildRankingRows(
       .sort(
         (left, right) =>
           Number(right.ownerCount ?? 0) - Number(left.ownerCount ?? 0) ||
-          Number(right.ownedVolumeCount ?? 0) - Number(left.ownedVolumeCount ?? 0) ||
+          Number(right.favoriteCount ?? 0) - Number(left.favoriteCount ?? 0) ||
+          Number(right.wantCount ?? 0) - Number(left.wantCount ?? 0) ||
           left.title.localeCompare(right.title),
       );
   }
@@ -128,6 +128,7 @@ export function buildRankingRows(
     (left, right) =>
       Number(right.popularityScore ?? 0) - Number(left.popularityScore ?? 0) ||
       Number(right.ownerCount ?? 0) - Number(left.ownerCount ?? 0) ||
+      Number(right.favoriteCount ?? 0) - Number(left.favoriteCount ?? 0) ||
       Number(right.wantCount ?? 0) - Number(left.wantCount ?? 0) ||
       left.title.localeCompare(right.title),
   );

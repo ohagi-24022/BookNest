@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Animated, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Animated, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useAppTheme } from '../../store/ThemeContext';
 
@@ -73,8 +73,8 @@ export function HomeToolbar({
     >
       <View style={styles.titleRow}>
         <View style={styles.titleBlock}>
-          <Text style={[styles.title, { color: colors.text }]}>BookNest</Text>
-          <Text style={[styles.subtitle, { color: colors.muted }]}>{countLabel}</Text>
+          <Text adjustsFontSizeToFit minimumFontScale={0.82} numberOfLines={1} style={[styles.title, { color: colors.text }]}>蒐集架</Text>
+          <Text numberOfLines={1} style={[styles.subtitle, { color: colors.muted }]}>{countLabel}</Text>
         </View>
         <Pressable
           accessibilityLabel="マイページを開く"
@@ -173,8 +173,13 @@ const styles = StyleSheet.create({
   },
   titleRow: { alignItems: 'center', flexDirection: 'row', gap: 12, justifyContent: 'space-between' },
   titleBlock: { flex: 1 },
-  title: { fontSize: 24, fontWeight: '800', letterSpacing: 0 },
-  subtitle: { fontSize: 12, marginTop: 1 },
+  title: {
+    fontFamily: Platform.select({ android: 'serif', ios: 'Hiragino Mincho ProN', default: 'serif' }),
+    fontSize: 28,
+    fontWeight: '600',
+    letterSpacing: 0,
+  },
+  subtitle: { alignSelf: 'flex-start', fontSize: 11, marginTop: 6, opacity: 0.68 },
   accountButton: {
     alignItems: 'center',
     borderRadius: 999,

@@ -150,7 +150,7 @@ export default function WishlistScreen() {
 
   const searchCandidates = async () => {
     if (!trimmedTitle) {
-      Alert.alert('BookNest', 'タイトルまたはシリーズ名を入力してください。');
+      Alert.alert('蒐集架', 'タイトルまたはシリーズ名を入力してください。');
       return;
     }
     setCandidateLoading(true);
@@ -171,7 +171,7 @@ export default function WishlistScreen() {
 
   const submit = () => {
     if (!trimmedTitle) {
-      Alert.alert('BookNest', '欲しい漫画のタイトルを入力してください。');
+      Alert.alert('蒐集架', '欲しい漫画のタイトルを入力してください。');
       return;
     }
     if (candidates.length > 1 && !selectedCandidate) {

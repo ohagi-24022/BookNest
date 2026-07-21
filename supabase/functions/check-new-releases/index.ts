@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 type FunctionMode = 'all' | 'check' | 'deliver';
@@ -303,12 +303,12 @@ async function deliverDailyNotifications(userLimit: number) {
       let lastError: string | null = null;
       for (const token of (tokens ?? []) as PushTokenRow[]) {
         const response = await sendExpoPush({
-          body: 'BookNestで新刊情報を確認できます。',
+          body: '蒐集架で新刊情報を確認できます。',
           data: {
             url: '/(tabs)/notifications',
           },
           sound: 'default',
-          title: 'BookNest 新刊情報',
+          title: '蒐集架 新刊情報',
           to: token.expo_push_token,
         });
         lastResponse = response;
@@ -330,7 +330,7 @@ async function deliverDailyNotifications(userLimit: number) {
           failed_at: status === 'failed' ? new Date().toISOString() : null,
           last_error: sent > 0 ? null : lastError ?? 'No enabled push token was available.',
           next_retry_at: sent > 0 ? new Date().toISOString() : nextRetryAt(attemptCount),
-          notification_title: 'BookNest 新刊情報',
+          notification_title: '蒐集架 新刊情報',
           response: lastResponse,
           status,
         })

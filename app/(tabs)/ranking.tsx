@@ -17,7 +17,6 @@ import { buildSeriesGroups } from '../../src/lib/seriesSelectors';
 import { normalizeSeriesKey } from '../../src/lib/series';
 import { supabase } from '../../src/lib/supabase';
 import { isMissingSupabaseFunctionError } from '../../src/lib/supabaseErrors';
-import { useAuth } from '../../src/store/AuthContext';
 import { useLibrary } from '../../src/store/LibraryContext';
 import { useAppTheme } from '../../src/store/ThemeContext';
 import { useWishlist } from '../../src/store/WishlistContext';
@@ -29,7 +28,6 @@ type LocalSeriesCover = {
 
 export default function RankingScreen() {
   const { colors } = useAppTheme();
-  const { user } = useAuth();
   const { books } = useLibrary();
   const { addItem, items } = useWishlist();
   const [globalRows, setGlobalRows] = useState<GlobalRankingRow[]>([]);
@@ -77,12 +75,6 @@ export default function RankingScreen() {
   );
 
   const loadRankings = async () => {
-    if (!user) {
-      setError('ランキングはログイン後に確認できます。');
-      setGlobalRows([]);
-      setGlobalFavoriteRows([]);
-      return;
-    }
     if (!supabase) {
       setError('Supabaseが未設定のため、ランキングを取得できません。');
       return;
@@ -113,7 +105,7 @@ export default function RankingScreen() {
 
   useEffect(() => {
     void loadRankings();
-  }, [user]);
+  }, []);
 
   return (
     <ScrollView

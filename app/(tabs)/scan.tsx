@@ -1,4 +1,4 @@
-import { useScrollToTop } from '@react-navigation/native';
+import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
@@ -39,6 +39,7 @@ function normalizeBarcode(data: string) {
 
 export default function ScanScreen() {
   const router = useRouter();
+  const isFocused = useIsFocused();
   const scrollRef = useRef<ScrollView>(null);
   const tabScrollToTopRef = useRef({
     scrollToTop: () => scrollRef.current?.scrollTo({ y: 0, animated: true }),
@@ -307,6 +308,8 @@ export default function ScanScreen() {
     setNotice({ tone: 'neutral', message: '内容を確認して追加してください。' });
   };
 
+  const cameraVisible = isFocused && !showConfirmation;
+
   const noticeColor =
     notice.tone === 'success'
       ? '#e8f7ee'
@@ -330,7 +333,7 @@ export default function ScanScreen() {
       style={[styles.screen, { backgroundColor: colors.background }]}
     >
       <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
-        {!showConfirmation && <View style={styles.cameraShell}>
+        {cameraVisible && <View style={styles.cameraShell}>
           {permission?.granted ? (
             <CameraView
               barcodeScannerSettings={{ barcodeTypes: ['ean13', 'ean8', 'upc_a', 'upc_e'] }}
