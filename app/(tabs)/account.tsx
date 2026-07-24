@@ -1,9 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { getAppIconName, setAlternateAppIcon, supportsAlternateIcons } from 'expo-alternate-app-icons';
 import { Link, router, useLocalSearchParams, useNavigation } from 'expo-router';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -26,6 +29,25 @@ import { useAppTheme } from '../../src/store/ThemeContext';
 
 const ESTIMATED_BOOK_PRICE = 600;
 
+type AppIconOption = {
+  label: string;
+  name: string | null;
+  image: number;
+  tone: string;
+};
+
+const APP_ICON_OPTIONS: AppIconOption[] = [
+  { label: '?', name: null, image: require('../../assets/app-icons/blue.png'), tone: '??' },
+  { label: '?', name: 'Green', image: require('../../assets/ios-alternate-icons/green.png'), tone: '?' },
+  { label: '?', name: 'Gold', image: require('../../assets/ios-alternate-icons/gold.png'), tone: '?' },
+  { label: '???', name: 'Rose', image: require('../../assets/ios-alternate-icons/rose.png'), tone: '??' },
+  { label: '????', name: 'Brown', image: require('../../assets/ios-alternate-icons/brown.png'), tone: '?' },
+  { label: '????', name: 'Teal', image: require('../../assets/ios-alternate-icons/teal.png'), tone: '??' },
+  { label: '?', name: 'Purple', image: require('../../assets/ios-alternate-icons/purple.png'), tone: '?' },
+  { label: '???', name: 'Gray', image: require('../../assets/ios-alternate-icons/gray.png'), tone: '?' },
+  { label: '?', name: 'Yellow', image: require('../../assets/ios-alternate-icons/yellow.png'), tone: '?' },
+];
+
 export default function AccountScreen() {
   const params = useLocalSearchParams<{ from?: string }>();
   const navigation = useNavigation();
@@ -37,6 +59,8 @@ export default function AccountScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [accountDeleting, setAccountDeleting] = useState(false);
+  const [activeIconName, setActiveIconName] = useState<string | null>(null);
+  const [iconChanging, setIconChanging] = useState<string | null>(null);
   const goBack = useCallback(() => {
     router.replace(params.from === 'home' ? '/(tabs)' : '/(tabs)/settings');
   }, [params.from]);
@@ -90,6 +114,33 @@ export default function AccountScreen() {
   useEffect(() => {
     void loadLogs();
   }, [loadLogs]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'ios' || !supportsAlternateIcons) return;
+    setActiveIconName(getAppIconName());
+  }, []);
+
+  const changeAppIcon = useCallback(async (iconName: string | null) => {
+    if (Platform.OS !== 'ios') return;
+    if (!supportsAlternateIcons) {
+      Alert.alert('??????????????', 'iOS????????????????????');
+      return;
+    }
+    if (activeIconName === iconName) return;
+    setIconChanging(iconName ?? 'default');
+    try {
+      const nextIconName = await setAlternateAppIcon(iconName);
+      setActiveIconName(nextIconName);
+    } catch (changeError) {
+      Alert.alert(
+        '???????????????',
+        changeError instanceof Error ? changeError.message : '????????????????????',
+      );
+    } finally {
+      setIconChanging(null);
+    }
+  }, [activeIconName]);
+
 
   const submitAccountDeletion = () => {
     Alert.alert(
@@ -153,6 +204,47 @@ export default function AccountScreen() {
           通知は正午ごろにまとめて届きます。どのシリーズの新刊かは、この画面で確認できます。
         </Text>
       </View>
+
+      {Platform.OS === 'ios' ? (
+        <View style={[styles.iconPickerSection, { backgroundColor: colors.elevated }]}>
+          <View style={styles.headerRow}>
+            <View>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>???????</Text>
+              <Text style={[styles.copy, { color: colors.muted }]}>?????????????????????????</Text>
+            </View>
+            <Ionicons color={colors.muted} name="phone-portrait-outline" size={22} />
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.iconOptionList}>
+            {APP_ICON_OPTIONS.map((option) => {
+              const selected = activeIconName === option.name;
+              const changing = iconChanging === (option.name ?? 'default');
+              return (
+                <Pressable
+                  accessibilityLabel={`${option.label}???????????`}
+                  disabled={changing}
+                  key={option.name ?? 'default'}
+                  onPress={() => void changeAppIcon(option.name)}
+                  style={[
+                    styles.iconOption,
+                    { borderColor: selected ? colors.primary : colors.border, backgroundColor: colors.background },
+                  ]}
+                >
+                  <Image source={option.image} style={styles.iconPreview} />
+                  <View style={styles.iconOptionLabelRow}>
+                    <Text style={[styles.iconOptionTitle, { color: colors.text }]}>{option.label}</Text>
+                    {selected ? <Ionicons color={colors.primary} name="checkmark-circle" size={16} /> : null}
+                  </View>
+                  <Text style={[styles.iconOptionTone, { color: colors.muted }]}>{option.tone}</Text>
+                  {changing ? <ActivityIndicator color={colors.primary} size="small" style={styles.iconChanging} /> : null}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+          {!supportsAlternateIcons ? (
+            <Text style={[styles.copy, { color: colors.muted }]}>?????????????????????iOS??????????????????????</Text>
+          ) : null}
+        </View>
+      ) : null}
 
       <View style={[styles.expenseSection, { backgroundColor: colors.elevated }]}>
         <View style={[styles.expenseIcon, { backgroundColor: colors.text }]}>
@@ -282,6 +374,14 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 18, fontWeight: '800' },
   email: { fontSize: 16, fontWeight: '800', marginTop: 10 },
   copy: { fontSize: 13, lineHeight: 18, marginTop: 4 },
+  iconPickerSection: { borderRadius: 8, gap: 12, padding: 14 },
+  iconOptionList: { gap: 10, paddingRight: 4 },
+  iconOption: { borderRadius: 8, borderWidth: 1, minHeight: 150, padding: 8, position: 'relative', width: 104 },
+  iconPreview: { borderRadius: 18, height: 88, width: 88 },
+  iconOptionLabelRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
+  iconOptionTitle: { fontSize: 13, fontWeight: '900' },
+  iconOptionTone: { fontSize: 11, fontWeight: '700', marginTop: 2 },
+  iconChanging: { bottom: 8, position: 'absolute', right: 8 },
   expenseSection: { borderRadius: 8, gap: 12, padding: 14, position: 'relative' },
   expenseHeader: { paddingRight: 54 },
   expenseText: { maxWidth: '100%' },
